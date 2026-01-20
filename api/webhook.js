@@ -1,10 +1,7 @@
 // api/webhook.js
 // WhatsApp Cloud API Webhook (Vercel)
 // - GET: verificación (hub.challenge)
-// - POST: recibe mensajes
-//   (A) pide respuesta a Apps Script (para mantener tu flujo como antes)
-//   (B) guarda SIEMPRE en Lark Bitable
-//   (C) responde al usuario por Graph API
+// - POST: recibe mensajes, guarda en Lark Bitable y responde por Graph API
 
 let LARK_CACHE = {
   token: null,
@@ -42,7 +39,6 @@ export default async function handler(req, res) {
 
     const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 
-    // Nota: si entras por navegador a /api/webhook sin hub.*, ES NORMAL que dé 403.
     if (mode === "subscribe" && token && VERIFY_TOKEN && token === VERIFY_TOKEN) {
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       return send(200, String(challenge || ""));
@@ -69,7 +65,7 @@ export default async function handler(req, res) {
       // Responder rápido a Meta para evitar reintentos
       if (!msg) return send(200, "OK");
 
-      const from = msg?.from; // wa_id del usuario (sin + normalmente)
+      const from = msg?.from; // wa_id del usuario
       const text = msg?.text?.body || "";
       const phoneNumberId = value?.metadata?.phone_number_id;
 
@@ -80,14 +76,10 @@ export default async function handler(req, res) {
 
       const telefono = from ? `+${from}` : "";
 
-      // (A) Respuesta por tu flujo (Apps Script) - como antes
-      // (A) Apps Script DESACTIVADO: ya no queremos Google Sheets
-    let flowReply = "";
+      // Reply base (no dependemos de Apps Script)
+      let replyText = "OK";
 
-      // Fallback si Apps Script no respondió
-      const replyText = flowReply || `Recibido: ${text || "(sin texto)"}`;
-
-      // (B) Guardar en Lark (NO bloqueamos la respuesta si falla Lark)
+      // (A) Guardar en Lark (si falla, mostramos error breve en WhatsApp y en logs)
       try {
         await larkCreateLead({
           wa_id: from || "",
@@ -97,10 +89,13 @@ export default async function handler(req, res) {
           created_at_ms: Date.now(),
         });
       } catch (e) {
-        console.error("LARK_SAVE_ERROR:", e);
+        const msgErr = String(e?.message || e);
+        console.error("LARK_SAVE_ERROR_MESSAGE:", msgErr);
+        // Debug visible (temporal): para que sepas exacto por qué falla
+        replyText = `ERROR LARK: ${msgErr.slice(0, 140)}`;
       }
 
-      // (C) Responder al usuario por Graph API
+      // (B) Responder al usuario por Graph API
       const waToken = process.env.WHATSAPP_TOKEN;
 
       if (!waToken || !phoneNumberId || !from) {
@@ -181,8 +176,9 @@ async function larkGetTenantToken() {
 }
 
 async function larkCreateLead({ wa_id, nombre, telefono, mensaje, created_at_ms }) {
-  const appToken = process.env.LARK_APP_TOKEN;  // ej: LLr7b0Q81a9FAWsyg8QlvFPQgVh
-  const tableId = process.env.LARK_TABLE_ID;    // ej: tblRYrOLDCitUkta
+  // OJO: estas env deben existir en Vercel como en tu screenshot
+  const appToken = process.env.LARK_APP_TOKEN;  // app_token de Bitable (no app_id)
+  const tableId = process.env.LARK_TABLE_ID;
 
   if (!appToken || !tableId) {
     throw new Error("Missing LARK_APP_TOKEN or LARK_TABLE_ID env vars");
@@ -190,23 +186,18 @@ async function larkCreateLead({ wa_id, nombre, telefono, mensaje, created_at_ms 
 
   const tenantToken = await larkGetTenantToken();
 
-  const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records`;
+  const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${encodeURIComponent(
+    appToken
+  )}/tables/${encodeURIComponent(tableId)}/records`;
 
-  // IMPORTANTE:
-  // - created_at: si tu campo es Date/Datetime en Lark, manda MILISEGUNDOS.
-  // - NUNCA metas "=" al inicio (eso provoca que Lark lo trate como fórmula).
+  // IMPORTANTE: los nombres de campos deben coincidir EXACTO con tu tabla
   const fields = {
     wa_id: String(wa_id || ""),
     nombre: String(nombre || ""),
     telefono: String(telefono || ""),
-    created_at: Number(created_at_ms || Date.now()),
+    mensaje: String(mensaje || ""), // SIEMPRE lo mandamos (para detectar si el campo existe)
+    created_at: Number(created_at_ms || Date.now()), // Date en ms
   };
-
-  // Solo si en tu tabla existe un campo llamado "mensaje"
-  // (si no existe, bórralo para evitar 400)
-  if (process.env.LARK_HAS_MENSAJE_FIELD === "1") {
-    fields.mensaje = String(mensaje || "");
-  }
 
   const resp = await fetch(url, {
     method: "POST",
