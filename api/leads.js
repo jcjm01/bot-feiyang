@@ -1,3 +1,5 @@
+const BUILD_ID = "leads-2026-01-20-01";
+
 // api/leads.js
 let cachedToken = null;
 let cachedTokenExp = 0; // epoch ms
@@ -35,6 +37,7 @@ async function getTenantToken() {
 function json(res, status, obj) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(obj));
   res.end(JSON.stringify(obj));
 }
 
