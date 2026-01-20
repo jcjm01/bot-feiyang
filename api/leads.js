@@ -6,18 +6,23 @@ async function getTenantToken() {
   const now = Date.now();
   if (cachedToken && now < cachedTokenExp - 60_000) return cachedToken; // 1 min buffer
 
-  const resp = await fetch("https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal", {
-    method: "POST",
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    body: JSON.stringify({
-      app_id: process.env.LARK_APP_ID,
-      app_secret: process.env.LARK_APP_SECRET,
-    }),
-  });
+  const resp = await fetch(
+    "https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({
+        app_id: process.env.LARK_APP_ID,
+        app_secret: process.env.LARK_APP_SECRET,
+      }),
+    }
+  );
 
   const data = await resp.json();
   if (!resp.ok || data.code !== 0) {
-    throw new Error(`Lark token error: http=${resp.status} code=${data.code} msg=${data.msg}`);
+    throw new Error(
+      `Lark token error: http=${resp.status} code=${data.code} msg=${data.msg}`
+    );
   }
 
   cachedToken = data.tenant_access_token;
@@ -52,8 +57,25 @@ export default async function handler(req, res) {
       return json(res, 401, { ok: false, error: "Unauthorized" });
     }
 
-    // Parse body (Vercel suele entregar req.body ya parseado; si llega string lo parseamos)
-    const body = typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
+    // Parse body robusto (string u objeto; tolera basura alrededor del JSON)
+    let body = req.body ?? {};
+
+    if (typeof body === "string") {
+      const raw = body.trim();
+
+      try {
+        body = JSON.parse(raw);
+      } catch (e) {
+        const start = raw.indexOf("{");
+        const end = raw.lastIndexOf("}");
+        if (start >= 0 && end > start) {
+          const sliced = raw.slice(start, end + 1);
+          body = JSON.parse(sliced);
+        } else {
+          throw e;
+        }
+      }
+    }
 
     const allowedFields = [
       "wa_id",
