@@ -81,24 +81,8 @@ export default async function handler(req, res) {
       const telefono = from ? `+${from}` : "";
 
       // (A) Respuesta por tu flujo (Apps Script) - como antes
-      const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL; // opcional
-      let flowReply = "";
-
-      if (APPS_SCRIPT_URL) {
-        try {
-          const r = await fetch(APPS_SCRIPT_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body), // mandamos el payload completo
-          });
-
-          const data = await r.json().catch(() => null);
-          flowReply = data?.reply || "";
-          console.log("APPS_SCRIPT_REPLY:", JSON.stringify(data, null, 2));
-        } catch (e) {
-          console.error("APPS_SCRIPT_ERROR:", e);
-        }
-      }
+      // (A) Apps Script DESACTIVADO: ya no queremos Google Sheets
+    let flowReply = "";
 
       // Fallback si Apps Script no respondió
       const replyText = flowReply || `Recibido: ${text || "(sin texto)"}`;
