@@ -6,18 +6,23 @@ async function getTenantToken() {
   const now = Date.now();
   if (cachedToken && now < cachedTokenExp - 60_000) return cachedToken; // 1 min buffer
 
-  const resp = await fetch("https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal", {
-    method: "POST",
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    body: JSON.stringify({
-      app_id: process.env.LARK_APP_ID,
-      app_secret: process.env.LARK_APP_SECRET,
-    }),
-  });
+  const resp = await fetch(
+    "https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({
+        app_id: process.env.LARK_APP_ID,
+        app_secret: process.env.LARK_APP_SECRET,
+      }),
+    }
+  );
 
   const data = await resp.json();
   if (!resp.ok || data.code !== 0) {
-    throw new Error(`Lark token error: http=${resp.status} code=${data.code} msg=${data.msg}`);
+    throw new Error(
+      `Lark token error: http=${resp.status} code=${data.code} msg=${data.msg}`
+    );
   }
 
   cachedToken = data.tenant_access_token;
@@ -39,30 +44,50 @@ function pick(obj, keys) {
   return out;
 }
 
-// Lee el raw body cuando Vercel/Node no lo da parseado como esperas
-async function readRawBody(req) {
-  return await new Promise((resolve, reject) => {
-    let data = "";
-    req.on("data", (chunk) => (data += chunk));
-    req.on("end", () => resolve(data));
-    req.on("error", reject);
-  });
-}
+/**
+ * Body parser robusto:
+ * - Soporta object (Next/Vercel ya parseado)
+ * - Soporta string
+ * - Soporta Buffer
+ * - Si el string trae basura antes del '{' o '[', recorta desde el primer '{'/'['
+ * - Si falla, devuelve 400 con una pista (raw_start) para que veamos qué está llegando
+ */
+function parseBody(req, res) {
+  let raw = req.body;
 
-function safeJsonParse(maybeJson) {
-  if (maybeJson === null || maybeJson === undefined) return {};
-  if (typeof maybeJson === "object") return maybeJson; // ya viene parseado
-  if (Buffer.isBuffer(maybeJson)) {
-    const s = maybeJson.toString("utf8");
-    return s ? JSON.parse(s) : {};
+  // Next.js suele dar object ya parseado
+  if (raw && typeof raw === "object" && !Buffer.isBuffer(raw)) {
+    return raw;
   }
-  if (typeof maybeJson === "string") {
-    const s = maybeJson.trim();
-    if (!s) return {};
-    return JSON.parse(s);
+
+  // Buffer -> string
+  if (Buffer.isBuffer(raw)) raw = raw.toString("utf8");
+
+  // Nada
+  if (raw === undefined || raw === null) return {};
+
+  // Otros tipos -> string
+  if (typeof raw !== "string") raw = String(raw);
+
+  // Limpieza básica + BOM
+  let trimmed = raw.trim().replace(/^\uFEFF/, "");
+
+  // Recorta basura antes del JSON real
+  const idx = trimmed.search(/[\{\[]/);
+  const candidate = idx >= 0 ? trimmed.slice(idx) : trimmed;
+
+  try {
+    return JSON.parse(candidate);
+  } catch (e) {
+    // OJO: esto es para debug. No exponemos todo, solo el inicio.
+    return json(res, 400, {
+      ok: false,
+      error: "Invalid JSON (server could not parse body)",
+      detail: e.message,
+      raw_start: trimmed.slice(0, 120),
+      raw_len: trimmed.length,
+    });
   }
-  // fallback
-  return {};
 }
 
 export default async function handler(req, res) {
@@ -73,33 +98,17 @@ export default async function handler(req, res) {
     }
 
     // Seguridad simple por API key
-    const apiKey = req.headers["x-api-key"];
+    const headerVal = req.headers["x-api-key"];
+    const apiKey = Array.isArray(headerVal) ? headerVal[0] : headerVal;
+
     if (!apiKey || apiKey !== process.env.LEADS_API_KEY) {
       return json(res, 401, { ok: false, error: "Unauthorized" });
     }
 
-    // 1) Intento normal
-    let body;
-    try {
-      body = safeJsonParse(req.body);
-    } catch (e) {
-      body = null;
-    }
-
-    // 2) Si falló, leo raw body y vuelvo a parsear
-    if (!body) {
-      const raw = await readRawBody(req);
-      try {
-        body = safeJsonParse(raw);
-      } catch (e) {
-        return json(res, 400, {
-          ok: false,
-          error: "Invalid JSON",
-          hint: "Asegúrate que Postman esté en Body -> raw -> JSON y Content-Type=application/json",
-          raw_preview: String(raw || "").slice(0, 200),
-        });
-      }
-    }
+    // Parse robusto
+    const body = parseBody(req, res);
+    // Si parseBody ya respondió con 400, aquí body es undefined (porque json() terminó la response)
+    if (!body || typeof body !== "object") return;
 
     const allowedFields = [
       "wa_id",
