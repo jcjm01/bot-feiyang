@@ -6,23 +6,18 @@ async function getTenantToken() {
   const now = Date.now();
   if (cachedToken && now < cachedTokenExp - 60_000) return cachedToken; // 1 min buffer
 
-  const resp = await fetch(
-    "https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json; charset=utf-8" },
-      body: JSON.stringify({
-        app_id: process.env.LARK_APP_ID,
-        app_secret: process.env.LARK_APP_SECRET,
-      }),
-    }
-  );
+  const resp = await fetch("https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal", {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify({
+      app_id: process.env.LARK_APP_ID,
+      app_secret: process.env.LARK_APP_SECRET,
+    }),
+  });
 
   const data = await resp.json();
   if (!resp.ok || data.code !== 0) {
-    throw new Error(
-      `Lark token error: http=${resp.status} code=${data.code} msg=${data.msg}`
-    );
+    throw new Error(`Lark token error: http=${resp.status} code=${data.code} msg=${data.msg}`);
   }
 
   cachedToken = data.tenant_access_token;
@@ -44,6 +39,32 @@ function pick(obj, keys) {
   return out;
 }
 
+// Lee el raw body cuando Vercel/Node no lo da parseado como esperas
+async function readRawBody(req) {
+  return await new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", (chunk) => (data += chunk));
+    req.on("end", () => resolve(data));
+    req.on("error", reject);
+  });
+}
+
+function safeJsonParse(maybeJson) {
+  if (maybeJson === null || maybeJson === undefined) return {};
+  if (typeof maybeJson === "object") return maybeJson; // ya viene parseado
+  if (Buffer.isBuffer(maybeJson)) {
+    const s = maybeJson.toString("utf8");
+    return s ? JSON.parse(s) : {};
+  }
+  if (typeof maybeJson === "string") {
+    const s = maybeJson.trim();
+    if (!s) return {};
+    return JSON.parse(s);
+  }
+  // fallback
+  return {};
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
@@ -57,23 +78,26 @@ export default async function handler(req, res) {
       return json(res, 401, { ok: false, error: "Unauthorized" });
     }
 
-    // Parse body robusto (string u objeto; tolera basura alrededor del JSON)
-    let body = req.body ?? {};
+    // 1) Intento normal
+    let body;
+    try {
+      body = safeJsonParse(req.body);
+    } catch (e) {
+      body = null;
+    }
 
-    if (typeof body === "string") {
-      const raw = body.trim();
-
+    // 2) Si falló, leo raw body y vuelvo a parsear
+    if (!body) {
+      const raw = await readRawBody(req);
       try {
-        body = JSON.parse(raw);
+        body = safeJsonParse(raw);
       } catch (e) {
-        const start = raw.indexOf("{");
-        const end = raw.lastIndexOf("}");
-        if (start >= 0 && end > start) {
-          const sliced = raw.slice(start, end + 1);
-          body = JSON.parse(sliced);
-        } else {
-          throw e;
-        }
+        return json(res, 400, {
+          ok: false,
+          error: "Invalid JSON",
+          hint: "Asegúrate que Postman esté en Body -> raw -> JSON y Content-Type=application/json",
+          raw_preview: String(raw || "").slice(0, 200),
+        });
       }
     }
 
