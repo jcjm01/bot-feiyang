@@ -65,7 +65,7 @@ export default async function handler(req, res) {
       // === 1) Leer estado actual del lead desde Lark (por wa_id) ===
       let lead = null;
       try {
-        lead = await larkFindLeadByWaId(from);
+        lead = await larkFindLatestLeadByWaId(from);
       } catch (e) {
         console.error("LARK_FIND_ERROR:", e?.message || e);
       }
@@ -273,26 +273,27 @@ async function larkCreateLead({ wa_id, nombre, telefono, created_at_ms, stage })
   return data;
 }
 
-async function larkFindLeadByWaId(waId) {
+async function larkFindLatestLeadByWaId(waId) {
   const tenantToken = await larkGetTenantToken();
-  const { appToken, tableId } = getBitableConfig();
+  const appToken = String(process.env.LARK_APP_TOKEN || "").split("?")[0].trim();
+  const tableId = String(process.env.LARK_TABLE_ID || "").trim();
 
   const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records/search`;
 
-  // Filtro por wa_id (columna real)
   const payload = {
     filter: {
       conjunction: "and",
-      conditions: [
-        { field_name: "wa_id", operator: "is", value: [String(waId || "")] },
-      ],
+      conditions: [{ field_name: "wa_id", operator: "is", value: [String(waId || "")] }],
     },
-    page_size: 1,
+    page_size: 20,
   };
 
   const resp = await fetch(url, {
     method: "POST",
-    headers: { Authorization: `Bearer ${tenantToken}`, "Content-Type": "application/json; charset=utf-8" },
+    headers: {
+      Authorization: `Bearer ${tenantToken}`,
+      "Content-Type": "application/json; charset=utf-8",
+    },
     body: JSON.stringify(payload),
   });
 
@@ -301,14 +302,24 @@ async function larkFindLeadByWaId(waId) {
     throw new Error(`Lark search error: status=${resp.status} body=${JSON.stringify(data)}`);
   }
 
-  const item = data?.data?.items?.[0];
-  if (!item) return null;
+  const items = data?.data?.items || [];
+  if (items.length === 0) return null;
 
-  return {
-    record_id: item.record_id,
-    fields: item.fields || {},
-  };
+  // elegir el registro más reciente por created_at
+  let best = items[0];
+  let bestTs = Number(best?.fields?.created_at || 0);
+
+  for (const it of items) {
+    const ts = Number(it?.fields?.created_at || 0);
+    if (ts > bestTs) {
+      best = it;
+      bestTs = ts;
+    }
+  }
+
+  return { record_id: best.record_id, fields: best.fields || {} };
 }
+
 
 async function larkUpdateLead(recordId, updates) {
   if (!recordId) return;
