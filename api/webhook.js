@@ -56,31 +56,46 @@ export default async function handler(req, res) {
       const phoneNumberId = value?.metadata?.phone_number_id;
 
       // ========= (A) Apps Script flow =========
-      const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
-      let replyText = "";
+const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
+const BOT_SHARED_SECRET = process.env.BOT_SHARED_SECRET;
 
-      if (!APPS_SCRIPT_URL) {
-        console.log("MISSING_APPS_SCRIPT_URL");
-        replyText = `Recibido: ${text || "(sin texto)"}`;
-      } else {
-        try {
-          const BOT_SHARED_SECRET = process.env.BOT_SHARED_SECRET;
+let replyText = "";
 
-          if (!BOT_SHARED_SECRET) {
-            console.log("MISSING_BOT_SHARED_SECRET");
-            replyText = `Recibido: ${text || "(sin texto)"}`;
-          } else {
-            const url =
-               APPS_SCRIPT_URL +
-              (APPS_SCRIPT_URL.includes("?") ? "&" : "?") +
-              "k=" +
-              encodeURIComponent(BOT_SHARED_SECRET);
+if (!APPS_SCRIPT_URL) {
+  console.log("MISSING_APPS_SCRIPT_URL");
+  replyText = `Recibido: ${text || "(sin texto)"}`;
+} else if (!BOT_SHARED_SECRET) {
+  console.log("MISSING_BOT_SHARED_SECRET");
+  replyText = `Recibido: ${text || "(sin texto)"}`;
+} else {
+  try {
+    const url =
+      APPS_SCRIPT_URL +
+      (APPS_SCRIPT_URL.includes("?") ? "&" : "?") +
+      "k=" +
+      encodeURIComponent(BOT_SHARED_SECRET);
 
-          const r = await fetch(url, {
-             method: "POST",
-             headers: { "Content-Type": "application/json" },
-             body: JSON.stringify(body), // payload completo a Apps Script
-          });
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body), // payload completo a Apps Script
+    });
+
+    const raw = await resp.text();
+    console.log("APPS_SCRIPT_STATUS:", resp.status);
+    console.log("APPS_SCRIPT_RAW:", raw);
+
+    let data = null;
+    try { data = JSON.parse(raw); } catch {}
+
+    replyText = data?.reply || `Recibido: ${text || "(sin texto)"}`;
+  } catch (e) {
+    console.error("APPS_SCRIPT_ERROR:", e?.message || e);
+    replyText = `Recibido: ${text || "(sin texto)"}`;
+  }
+}
+
+
 
   const data = await r.json().catch(() => null);
   console.log("APPS_SCRIPT_REPLY:", JSON.stringify(data, null, 2));
