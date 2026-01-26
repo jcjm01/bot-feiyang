@@ -1,11 +1,11 @@
-// api/webhook.js  (Vercel)
+// api/webhook.js (Vercel - CommonJS)
 // WhatsApp -> (A) Apps Script (Sheets flow) -> reply
-//          -> (B) Sync to Lark when FLOW_COMPLETED
+//          -> (B) Sync to Lark when FLOW_COMPLETED (heurística)
 //          -> (C) Reply to WhatsApp
 
 let LARK_CACHE = { token: null, expiresAtMs: 0 };
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   const send = (code, body = "OK") => {
     res.statusCode = code;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -55,57 +55,39 @@ export default async function handler(req, res) {
       const text = msg?.text?.body || "";
       const phoneNumberId = value?.metadata?.phone_number_id;
 
-    // ========= (A) Apps Script flow =========
-const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
-const BOT_SHARED_SECRET = process.env.BOT_SHARED_SECRET;
+      // ========= (A) Apps Script flow =========
+      const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
+      const BOT_SHARED_SECRET = process.env.BOT_SHARED_SECRET;
 
-let replyText = "";
+      let replyText = "";
 
-if (!APPS_SCRIPT_URL) {
-  console.log("MISSING_APPS_SCRIPT_URL");
-  replyText = `Recibido: ${text || "(sin texto)"}`;
-} else if (!BOT_SHARED_SECRET) {
-  console.log("MISSING_BOT_SHARED_SECRET");
-  replyText = `Recibido: ${text || "(sin texto)"}`;
-} else {
-  try {
-    const url =
-      APPS_SCRIPT_URL +
-      (APPS_SCRIPT_URL.includes("?") ? "&" : "?") +
-      "k=" +
-      encodeURIComponent(BOT_SHARED_SECRET);
+      if (!APPS_SCRIPT_URL) {
+        console.log("MISSING_APPS_SCRIPT_URL");
+        replyText = `Recibido: ${text || "(sin texto)"}`;
+      } else if (!BOT_SHARED_SECRET) {
+        console.log("MISSING_BOT_SHARED_SECRET");
+        replyText = `Recibido: ${text || "(sin texto)"}`;
+      } else {
+        try {
+          const url =
+            APPS_SCRIPT_URL +
+            (APPS_SCRIPT_URL.includes("?") ? "&" : "?") +
+            "k=" +
+            encodeURIComponent(BOT_SHARED_SECRET);
 
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+          const resp = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
 
-    const raw = await resp.text();
-    console.log("APPS_SCRIPT_STATUS:", resp.status);
-    console.log("APPS_SCRIPT_RAW:", raw);
+          const raw = await resp.text();
+          console.log("APPS_SCRIPT_STATUS:", resp.status);
+          console.log("APPS_SCRIPT_RAW:", raw);
 
-    let data = null;
-    try { data = JSON.parse(raw); } catch {}
+          let data = null;
+          try { data = JSON.parse(raw); } catch {}
 
-    replyText = data?.reply || `Recibido: ${text || "(sin texto)"}`;
-  } catch (e) {
-    console.error("APPS_SCRIPT_ERROR:", e?.message || e);
-    replyText = `Recibido: ${text || "(sin texto)"}`;
-  }
-}
-
-
-
-
-  const data = await r.json().catch(() => null);
-  console.log("APPS_SCRIPT_REPLY:", JSON.stringify(data, null, 2));
-  replyText = data?.reply || `Recibido: ${text || "(sin texto)"}`;
-}
-
-
-          const data = await r.json().catch(() => null);
-          console.log("APPS_SCRIPT_REPLY:", JSON.stringify(data, null, 2));
           replyText = data?.reply || `Recibido: ${text || "(sin texto)"}`;
         } catch (e) {
           console.error("APPS_SCRIPT_ERROR:", e?.message || e);
@@ -114,17 +96,12 @@ if (!APPS_SCRIPT_URL) {
       }
 
       // ========= (B) Sync to Lark (cuando el flujo terminó) =========
-      // Tu Apps Script escribe en leads: raw_message = "FLOW_COMPLETED"
-      // Como el webhook NO lee Sheets, usamos una heurística:
-      // Si el reply del Apps Script incluye "Hemos registrado tus datos" lo tratamos como completado.
       const looksCompleted =
         typeof replyText === "string" &&
         replyText.includes("Hemos registrado tus datos");
 
       if (looksCompleted) {
         try {
-          // Extraer datos básicos del payload (lo demás viene del flujo en Sheets).
-          // Aquí guardamos al menos el evento y el wa_id.
           const contactName =
             value?.contacts?.[0]?.profile?.name ||
             value?.contacts?.[0]?.profile?.formatted_name ||
@@ -141,7 +118,6 @@ if (!APPS_SCRIPT_URL) {
           console.log("LARK_SYNC_OK");
         } catch (e) {
           console.error("LARK_SYNC_ERROR:", e?.message || e);
-          // No rompemos el flujo
         }
       } else {
         console.log("LARK_SYNC_SKIP:not_completed");
@@ -158,7 +134,7 @@ if (!APPS_SCRIPT_URL) {
         return send(200, "OK");
       }
 
-      const url = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
+      const waUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
       const payload = {
         messaging_product: "whatsapp",
         to: from,
@@ -166,7 +142,7 @@ if (!APPS_SCRIPT_URL) {
         text: { body: replyText },
       };
 
-      const resp = await fetch(url, {
+      const waResp = await fetch(waUrl, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${waToken}`,
@@ -175,8 +151,8 @@ if (!APPS_SCRIPT_URL) {
         body: JSON.stringify(payload),
       });
 
-      const respData = await resp.json().catch(() => ({}));
-      console.log("SEND_RESPONSE:", resp.status, JSON.stringify(respData, null, 2));
+      const waRespData = await waResp.json().catch(() => ({}));
+      console.log("SEND_RESPONSE:", waResp.status, JSON.stringify(waRespData, null, 2));
 
       return send(200, "OK");
     } catch (err) {
@@ -187,7 +163,7 @@ if (!APPS_SCRIPT_URL) {
 
   res.setHeader("Allow", "GET, POST");
   return send(405, "Method Not Allowed");
-}
+};
 
 // =========================
 // LARK HELPERS
@@ -225,19 +201,16 @@ async function larkCreateLead({ wa_id, nombre, telefono, mensaje, created_at_ms 
 
   if (!appTokenRaw || !tableId) throw new Error("Missing LARK_APP_TOKEN or LARK_TABLE_ID");
 
-  // Por seguridad: si alguien pegó el token con ?table=..., lo recortamos
   const appToken = String(appTokenRaw).split("?")[0].trim();
 
   const tenantToken = await larkGetTenantToken();
   const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records`;
 
-  // IMPORTANTE: nombres de campos deben existir en tu Bitable
   const fields = {
     wa_id: String(wa_id || ""),
     created_at: Number(created_at_ms || Date.now()),
   };
 
-  // Solo setea campos si existen en tu tabla con esos nombres exactos:
   if (process.env.LARK_FIELD_NOMBRE !== "0") fields.nombre = String(nombre || "");
   if (process.env.LARK_FIELD_TELEFONO !== "0") fields.telefono = String(telefono || "");
   if (process.env.LARK_FIELD_MENSAJE !== "0") fields.mensaje = String(mensaje || "");
