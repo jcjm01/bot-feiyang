@@ -64,11 +64,29 @@ export default async function handler(req, res) {
         replyText = `Recibido: ${text || "(sin texto)"}`;
       } else {
         try {
-          const r = await fetch(APPS_SCRIPT_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body), // payload completo a Apps Script
+          const BOT_SHARED_SECRET = process.env.BOT_SHARED_SECRET;
+
+          if (!BOT_SHARED_SECRET) {
+            console.log("MISSING_BOT_SHARED_SECRET");
+            replyText = `Recibido: ${text || "(sin texto)"}`;
+          } else {
+            const url =
+               APPS_SCRIPT_URL +
+              (APPS_SCRIPT_URL.includes("?") ? "&" : "?") +
+              "k=" +
+              encodeURIComponent(BOT_SHARED_SECRET);
+
+          const r = await fetch(url, {
+             method: "POST",
+             headers: { "Content-Type": "application/json" },
+             body: JSON.stringify(body), // payload completo a Apps Script
           });
+
+  const data = await r.json().catch(() => null);
+  console.log("APPS_SCRIPT_REPLY:", JSON.stringify(data, null, 2));
+  replyText = data?.reply || `Recibido: ${text || "(sin texto)"}`;
+}
+
 
           const data = await r.json().catch(() => null);
           console.log("APPS_SCRIPT_REPLY:", JSON.stringify(data, null, 2));
