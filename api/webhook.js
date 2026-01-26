@@ -55,7 +55,7 @@ export default async function handler(req, res) {
       const text = msg?.text?.body || "";
       const phoneNumberId = value?.metadata?.phone_number_id;
 
-      // ========= (A) Apps Script flow =========
+    // ========= (A) Apps Script flow =========
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
 const BOT_SHARED_SECRET = process.env.BOT_SHARED_SECRET;
 
@@ -78,7 +78,7 @@ if (!APPS_SCRIPT_URL) {
     const resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body), // payload completo a Apps Script
+      body: JSON.stringify(body),
     });
 
     const raw = await resp.text();
@@ -94,6 +94,7 @@ if (!APPS_SCRIPT_URL) {
     replyText = `Recibido: ${text || "(sin texto)"}`;
   }
 }
+
 
 
 
