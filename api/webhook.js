@@ -25,17 +25,25 @@ module.exports = async function handler(req, res) {
   };
 
   // ========= GET verify =========
-  if (req.method === "GET") {
-    const mode = req.query?.["hub.mode"];
-    const token = req.query?.["hub.verify_token"];
-    const challenge = req.query?.["hub.challenge"];
-    const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+if (req.method === "GET") {
+  const mode = req.query?.["hub.mode"];
+  const token = req.query?.["hub.verify_token"];
+  const challenge = req.query?.["hub.challenge"];
+  const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 
-    if (mode === "subscribe" && token && VERIFY_TOKEN && token === VERIFY_TOKEN) {
+  // 1) Challenge de Meta
+  if (mode === "subscribe") {
+    if (token && VERIFY_TOKEN && token === VERIFY_TOKEN) {
       return send(200, String(challenge || ""));
     }
+    // Si es challenge pero token incorrecto, aquí sí mantenemos 403
     return send(403, "Forbidden");
   }
+
+  // 2) Cualquier otro GET (debug/healthcheck) -> 200
+  return send(200, "ok");
+}
+
 
   // ========= POST events =========
   if (req.method === "POST") {
@@ -53,7 +61,8 @@ module.exports = async function handler(req, res) {
 
       const from = msg?.from;
       const text = msg?.text?.body || "";
-      const phoneNumberId = value?.metadata?.phone_number_id;
+      const phoneNumberId = value?.metadata?.phone_number_id || process.env.WHATSAPP_PHONE_NUMBER_ID;
+
 
       // ========= (A) Apps Script flow =========
       const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
