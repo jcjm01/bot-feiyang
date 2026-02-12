@@ -383,9 +383,15 @@ async function larkCreateLead({
   const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records`;
 
   // OJO: usamos exactamente los nombres de columna que tú mostraste en Lark
+const createdAt = new Date(created_at_ms || Date.now());
+const createdAtYYYYMMDD = createdAt.toISOString().slice(0, 10); // "2026-02-12"
+
+const syncedAt = new Date();
+const syncedAtYYYYMMDD = syncedAt.toISOString().slice(0, 10);
+
   const fields = {
     wa_id: String(wa_id || ""),
-    created_at: Number(created_at_ms || Date.now()),
+    created_at: createdAtYYYYMMDD,
     sucursal: String(sucursal || ""),
     producto_interes: String(producto_interes || ""),
     intencion_cliente: String(intencion_cliente || ""),
@@ -397,7 +403,7 @@ async function larkCreateLead({
     mensaje: String(mensaje || ""),
     stage: String(stage || "COMPLETED"),
     lark_status: "OK",
-    lark_synced_at: Date.now(),
+    lark_synced_at: syncedAtYYYYMMDD,
     lark_error: "",
   };
 
