@@ -1,8 +1,8 @@
 // api/webhook.js (Vercel - CommonJS)
 // OBJETIVO:
-// - Responder desde Node (rápido, 1 mensaje)
-// - Apps Script SOLO para guardar (opcional)
-// - Lark para guardar Lead cuando el flujo termina
+// - Responder rápido (Node decide la respuesta; no Apps Script)
+// - Mantener cuestionario tipo Feiyang: Producto -> Interés -> Nombre -> Empresa -> Ciudad/Sucursal
+// - Guardar en Lark al terminar
 
 let LARK_CACHE = { token: null, expiresAtMs: 0 };
 
@@ -10,7 +10,7 @@ let LARK_CACHE = { token: null, expiresAtMs: 0 };
 const SEEN = new Map(); // msgId -> expiresAt
 const SEEN_TTL_MS = 5 * 60 * 1000;
 
-// Estado simple (por instancia). Para producción lo pasaremos a Lark/DB.
+// Estado simple en memoria (por instancia). Para producción se pasa a Lark/DB.
 const STATE = new Map(); // wa_id -> { step, data, exp }
 const STATE_TTL_MS = 60 * 60 * 1000; // 1 hora
 
@@ -36,97 +36,143 @@ function resetState(wa_id) {
   STATE.delete(wa_id);
 }
 
-function normalizeText(t) {
+function norm(t) {
   return String(t || "").trim();
 }
 
-function isResetCommand(t) {
-  const s = normalizeText(t).toLowerCase();
-  return s === "reset" || s === "reiniciar" || s === "menu" || s === "hola";
+function normLow(t) {
+  return norm(t).toLowerCase();
+}
+
+function isResetCommand(text) {
+  const s = normLow(text);
+  return s === "menu" || s === "hola" || s === "reiniciar" || s === "reset";
+}
+
+// ------- Cuestionario “Feiyang” -------
+function askProducto() {
+  return [
+    "¡Hola! ¿Qué te interesa?",
+    "1) Marcadoras láser",
+    "2) Limpiadoras láser",
+    "3) Otro",
+    "",
+    "Responde con 1, 2 o 3."
+  ].join("\n");
+}
+
+function parseProducto(text) {
+  const s = normLow(text);
+  if (s === "1" || s.includes("marc")) return "Marcadoras láser";
+  if (s === "2" || s.includes("limp")) return "Limpiadoras láser";
+  if (s === "3" || s.includes("otro")) return "Otro";
+  return null;
+}
+
+function askInteres() {
+  return [
+    "Perfecto. ¿Qué necesitas?",
+    "1) DEMO",
+    "2) Cotización",
+    "3) Recibir más información",
+    "",
+    "Responde con 1, 2 o 3."
+  ].join("\n");
+}
+
+function parseInteres(text) {
+  const s = normLow(text);
+  if (s === "1" || s.includes("demo")) return "DEMO";
+  if (s === "2" || s.includes("cot")) return "Cotización";
+  if (s === "3" || s.includes("info")) return "Recibir más información";
+  return null;
+}
+
+function askNombre() {
+  return "Gracias. ¿Cuál es tu nombre completo?";
+}
+
+function askEmpresa() {
+  return "Gracias. ¿Cuál es el nombre de tu empresa o taller?";
+}
+
+function askCiudad() {
+  return "Perfecto. ¿En qué ciudad/sucursal te gustaría atenderte? (Ej: CDMX, MTY, GDL...)";
 }
 
 /**
- * Decide la respuesta del bot y actualiza el estado.
- * Regresa: { replyText, shouldSave, leadData }
+ * Lógica del bot (rápida).
+ * Regresa: { replyText, done, leadData }
  */
 function botLogic(wa_id, incomingText) {
-  const text = normalizeText(incomingText);
+  const text = norm(incomingText);
 
   if (isResetCommand(text)) {
     resetState(wa_id);
-    setState(wa_id, { step: "ASK_NAME", data: {} });
-    return {
-      replyText: "¡Hola! ¿Cuál es tu nombre completo?",
-      shouldSave: false,
-      leadData: null,
-    };
+    setState(wa_id, { step: "ASK_PRODUCTO", data: {} });
+    return { replyText: askProducto(), done: false, leadData: null };
   }
 
   const st = getState(wa_id);
 
-  // START: si alguien escribe algo sin "hola", igual arrancamos
   if (st.step === "START") {
-    setState(wa_id, { step: "ASK_NAME", data: {} });
-    return {
-      replyText: "¡Hola! ¿Cuál es tu nombre completo?",
-      shouldSave: false,
-      leadData: null,
-    };
+    setState(wa_id, { step: "ASK_PRODUCTO", data: {} });
+    return { replyText: askProducto(), done: false, leadData: null };
   }
 
-  if (st.step === "ASK_NAME") {
+  if (st.step === "ASK_PRODUCTO") {
+    const producto = parseProducto(text);
+    if (!producto) return { replyText: "No entendí 😅 Responde con 1, 2 o 3.\n\n" + askProducto(), done: false, leadData: null };
+    st.data.producto = producto;
+    setState(wa_id, { step: "ASK_INTERES", data: st.data });
+    return { replyText: askInteres(), done: false, leadData: null };
+  }
+
+  if (st.step === "ASK_INTERES") {
+    const interes = parseInteres(text);
+    if (!interes) return { replyText: "No entendí 😅 Responde con 1, 2 o 3.\n\n" + askInteres(), done: false, leadData: null };
+    st.data.interes = interes;
+    setState(wa_id, { step: "ASK_NOMBRE", data: st.data });
+    return { replyText: askNombre(), done: false, leadData: null };
+  }
+
+  if (st.step === "ASK_NOMBRE") {
     st.data.nombre = text;
-    setState(wa_id, { step: "ASK_COMPANY", data: st.data });
-    return {
-      replyText: "Gracias. ¿Cuál es el nombre de tu empresa o taller?",
-      shouldSave: false,
-      leadData: null,
-    };
+    setState(wa_id, { step: "ASK_EMPRESA", data: st.data });
+    return { replyText: askEmpresa(), done: false, leadData: null };
   }
 
-  if (st.step === "ASK_COMPANY") {
+  if (st.step === "ASK_EMPRESA") {
     st.data.empresa = text;
-    setState(wa_id, { step: "ASK_BRANCH", data: st.data });
-    return {
-      replyText: "Perfecto. ¿En qué sucursal te gustaría atenderte? (CDMX / MTY)",
-      shouldSave: false,
-      leadData: null,
-    };
+    setState(wa_id, { step: "ASK_CIUDAD", data: st.data });
+    return { replyText: askCiudad(), done: false, leadData: null };
   }
 
-  if (st.step === "ASK_BRANCH") {
-    const branchRaw = text.toLowerCase();
-    const branch =
-      branchRaw.includes("cdmx") ? "CDMX" :
-      branchRaw.includes("mty") ? "MTY" :
-      text;
+  if (st.step === "ASK_CIUDAD") {
+    st.data.ciudad = text;
 
-    st.data.sucursal = branch;
-
-    // Flujo terminado
     setState(wa_id, { step: "DONE", data: st.data });
 
     const leadData = {
       wa_id: String(wa_id || ""),
+      telefono: wa_id ? `+${wa_id}` : "",
+      producto: String(st.data.producto || ""),
+      interes: String(st.data.interes || ""),
       nombre: String(st.data.nombre || ""),
       empresa: String(st.data.empresa || ""),
-      sucursal: String(st.data.sucursal || ""),
+      ciudad: String(st.data.ciudad || ""),
       created_at_ms: nowMs(),
     };
 
     return {
       replyText: "Listo ✅ Ya registré tus datos. En breve te contactamos. (Escribe 'menu' para reiniciar)",
-      shouldSave: true,
+      done: true,
       leadData,
     };
   }
 
-  // DONE o cualquier otro paso no esperado
-  return {
-    replyText: "Ya tengo tus datos ✅. Escribe 'menu' si quieres iniciar de nuevo.",
-    shouldSave: false,
-    leadData: null,
-  };
+  // DONE
+  return { replyText: "Ya tengo tus datos ✅. Escribe 'menu' para reiniciar.", done: false, leadData: null };
 }
 
 module.exports = async function handler(req, res) {
@@ -200,12 +246,12 @@ module.exports = async function handler(req, res) {
         return send(200, "OK");
       }
 
-      // ✅ (1) Node decide la respuesta (SIN Apps Script)
-      const { replyText, shouldSave, leadData } = botLogic(from, text);
+      // ✅ 1) Bot rápido (Node decide respuesta)
+      const { replyText, done, leadData } = botLogic(from, text);
       console.log("BOT_REPLY:", replyText);
       console.log("TIMER: before_send_ms", Date.now() - t0);
 
-      // ✅ (2) Enviar respuesta a WhatsApp (1 SOLO mensaje)
+      // ✅ 2) Enviar a WhatsApp (1 mensaje)
       const waUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
       const payload = {
         messaging_product: "whatsapp",
@@ -227,56 +273,16 @@ module.exports = async function handler(req, res) {
       console.log("SEND_RESPONSE:", waResp.status, JSON.stringify(waRespData, null, 2));
       console.log("TIMER: after_send_ms", Date.now() - t0);
 
-      // ✅ (3) Guardados (DESPUÉS de enviar WhatsApp)
-      // 3A) Guardar en Lark cuando ya terminó el flujo
-      if (shouldSave && leadData) {
+      // ✅ 3) Guardar en Lark SOLO cuando termine el flujo
+      if (done && leadData) {
         try {
-          await larkCreateLead({
-            wa_id: leadData.wa_id,
-            nombre: leadData.nombre,
-            telefono: leadData.wa_id ? `+${leadData.wa_id}` : "",
-            mensaje: `empresa=${leadData.empresa} | sucursal=${leadData.sucursal}`,
-            created_at_ms: leadData.created_at_ms,
-          });
+          await larkCreateLeadFromLeadData(leadData);
           console.log("LARK_SYNC_OK");
         } catch (e) {
           console.error("LARK_SYNC_ERROR:", e?.message || e);
         }
-
-        // 3B) (Opcional) Apps Script SOLO para guardar
-        // Requiere que tu Apps Script soporte este formato.
-        const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
-        const BOT_SHARED_SECRET = process.env.BOT_SHARED_SECRET;
-        const USE_APPS_SCRIPT_SAVE = process.env.USE_APPS_SCRIPT_SAVE === "1";
-
-        if (USE_APPS_SCRIPT_SAVE && APPS_SCRIPT_URL && BOT_SHARED_SECRET) {
-          try {
-            const url =
-              APPS_SCRIPT_URL +
-              (APPS_SCRIPT_URL.includes("?") ? "&" : "?") +
-              "k=" + encodeURIComponent(BOT_SHARED_SECRET);
-
-            const resp = await fetch(url, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                action: "save_lead",
-                lead: leadData,
-                wa_event: body, // por si lo quieres para debug
-              }),
-            });
-
-            const raw = await resp.text();
-            console.log("APPS_SAVE_STATUS:", resp.status);
-            console.log("APPS_SAVE_RAW:", raw);
-          } catch (e) {
-            console.error("APPS_SAVE_ERROR:", e?.message || e);
-          }
-        } else {
-          console.log("APPS_SAVE_SKIP");
-        }
       } else {
-        console.log("SAVE_SKIP:not_done");
+        console.log("LARK_SAVE_SKIP:not_done");
       }
 
       console.log("TIMER: end_ms", Date.now() - t0);
@@ -321,25 +327,62 @@ async function larkGetTenantToken() {
   return LARK_CACHE.token;
 }
 
-async function larkCreateLead({ wa_id, nombre, telefono, mensaje, created_at_ms }) {
+/**
+ * ✅ Guardado flexible:
+ * - Si defines variables de entorno con nombres EXACTOS de campo de Lark, se rellenan esas columnas.
+ * - Si no defines nada, cae a campos "wa_id / created_at / nombre / telefono / mensaje" como antes.
+ *
+ * Variables opcionales (pon el nombre EXACTO del campo en tu Bitable):
+ * - LARK_FIELD_WA_ID
+ * - LARK_FIELD_CREATED_AT
+ * - LARK_FIELD_PRODUCTO
+ * - LARK_FIELD_INTERES
+ * - LARK_FIELD_NOMBRE
+ * - LARK_FIELD_EMPRESA
+ * - LARK_FIELD_CIUDAD
+ * - LARK_FIELD_TELEFONO
+ *
+ * Si no las pones, guardará:
+ * - wa_id, created_at, nombre, telefono, mensaje (mensaje contiene todo en texto)
+ */
+async function larkCreateLeadFromLeadData(lead) {
   const appTokenRaw = process.env.LARK_APP_TOKEN;
   const tableId = process.env.LARK_TABLE_ID;
-
   if (!appTokenRaw || !tableId) throw new Error("Missing LARK_APP_TOKEN or LARK_TABLE_ID");
 
   const appToken = String(appTokenRaw).split("?")[0].trim();
-
   const tenantToken = await larkGetTenantToken();
+
   const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records`;
 
-  const fields = {
-    wa_id: String(wa_id || ""),
-    created_at: Number(created_at_ms || Date.now()),
+  const fields = {};
+
+  // Mapeo por env (si existe)
+  const map = (envKey, value) => {
+    const fieldName = process.env[envKey];
+    if (fieldName && fieldName !== "0") fields[fieldName] = value;
   };
 
-  if (process.env.LARK_FIELD_NOMBRE !== "0") fields.nombre = String(nombre || "");
-  if (process.env.LARK_FIELD_TELEFONO !== "0") fields.telefono = String(telefono || "");
-  if (process.env.LARK_FIELD_MENSAJE !== "0") fields.mensaje = String(mensaje || "");
+  map("LARK_FIELD_WA_ID", String(lead.wa_id || ""));
+  map("LARK_FIELD_CREATED_AT", Number(lead.created_at_ms || Date.now()));
+  map("LARK_FIELD_PRODUCTO", String(lead.producto || ""));
+  map("LARK_FIELD_INTERES", String(lead.interes || ""));
+  map("LARK_FIELD_NOMBRE", String(lead.nombre || ""));
+  map("LARK_FIELD_EMPRESA", String(lead.empresa || ""));
+  map("LARK_FIELD_CIUDAD", String(lead.ciudad || ""));
+  map("LARK_FIELD_TELEFONO", String(lead.telefono || ""));
+
+  // Fallback clásico (por si no pusiste mapeos)
+  if (Object.keys(fields).length === 0) {
+    fields.wa_id = String(lead.wa_id || "");
+    fields.created_at = Number(lead.created_at_ms || Date.now());
+    fields.nombre = String(lead.nombre || "");
+    fields.telefono = String(lead.telefono || "");
+    fields.mensaje = `producto=${lead.producto} | interes=${lead.interes} | empresa=${lead.empresa} | ciudad=${lead.ciudad}`;
+  } else {
+    // Aun con mapeo, metemos mensaje por si quieres histórico (si existe ese campo)
+    map("LARK_FIELD_MENSAJE", `producto=${lead.producto} | interes=${lead.interes} | empresa=${lead.empresa} | ciudad=${lead.ciudad}`);
+  }
 
   const resp = await fetch(url, {
     method: "POST",
