@@ -391,7 +391,7 @@ const syncedAtYYYYMMDD = syncedAt.toISOString().slice(0, 10);
 
   const fields = {
     wa_id: String(wa_id || ""),
-    created_at: createdAtYYYYMMDD,
+    created_at: Number(created_at_ms || Date.now()),
     sucursal: String(sucursal || ""),
     producto_interes: String(producto_interes || ""),
     intencion_cliente: String(intencion_cliente || ""),
@@ -403,7 +403,7 @@ const syncedAtYYYYMMDD = syncedAt.toISOString().slice(0, 10);
     mensaje: String(mensaje || ""),
     stage: String(stage || "COMPLETED"),
     lark_status: "OK",
-    lark_synced_at: syncedAtYYYYMMDD,
+    lark_synced_at: Number(Date.now()),
     lark_error: "",
   };
 
