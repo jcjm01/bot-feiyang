@@ -1,179 +1,11 @@
 // api/webhook.js (Vercel - CommonJS)
-// OBJETIVO:
-// - Responder rápido (Node decide la respuesta; no Apps Script)
-// - Mantener cuestionario tipo Feiyang: Producto -> Interés -> Nombre -> Empresa -> Ciudad/Sucursal
-// - Guardar en Lark al terminar
+// Flujo rápido en Node + Persistencia en Lark (MISMA TABLA, filtrado por campo "sucursal")
 
 let LARK_CACHE = { token: null, expiresAtMs: 0 };
 
-// Dedupe simple en memoria (sirve por instancia)
+// dedupe simple en memoria (sirve por instancia)
 const SEEN = new Map(); // msgId -> expiresAt
 const SEEN_TTL_MS = 5 * 60 * 1000;
-
-// Estado simple en memoria (por instancia). Para producción se pasa a Lark/DB.
-const STATE = new Map(); // wa_id -> { step, data, exp }
-const STATE_TTL_MS = 60 * 60 * 1000; // 1 hora
-
-function nowMs() { return Date.now(); }
-
-function getState(wa_id) {
-  const now = nowMs();
-  const s = STATE.get(wa_id);
-  if (!s || (s.exp && s.exp < now)) {
-    const fresh = { step: "START", data: {}, exp: now + STATE_TTL_MS };
-    STATE.set(wa_id, fresh);
-    return fresh;
-  }
-  return s;
-}
-
-function setState(wa_id, next) {
-  next.exp = nowMs() + STATE_TTL_MS;
-  STATE.set(wa_id, next);
-}
-
-function resetState(wa_id) {
-  STATE.delete(wa_id);
-}
-
-function norm(t) {
-  return String(t || "").trim();
-}
-
-function normLow(t) {
-  return norm(t).toLowerCase();
-}
-
-function isResetCommand(text) {
-  const s = normLow(text);
-  return s === "menu" || s === "hola" || s === "reiniciar" || s === "reset";
-}
-
-// ------- Cuestionario “Feiyang” -------
-function askProducto() {
-  return [
-    "¡Hola! ¿Qué te interesa?",
-    "1) Marcadoras láser",
-    "2) Limpiadoras láser",
-    "3) Otro",
-    "",
-    "Responde con 1, 2 o 3."
-  ].join("\n");
-}
-
-function parseProducto(text) {
-  const s = normLow(text);
-  if (s === "1" || s.includes("marc")) return "Marcadoras láser";
-  if (s === "2" || s.includes("limp")) return "Limpiadoras láser";
-  if (s === "3" || s.includes("otro")) return "Otro";
-  return null;
-}
-
-function askInteres() {
-  return [
-    "Perfecto. ¿Qué necesitas?",
-    "1) DEMO",
-    "2) Cotización",
-    "3) Recibir más información",
-    "",
-    "Responde con 1, 2 o 3."
-  ].join("\n");
-}
-
-function parseInteres(text) {
-  const s = normLow(text);
-  if (s === "1" || s.includes("demo")) return "DEMO";
-  if (s === "2" || s.includes("cot")) return "Cotización";
-  if (s === "3" || s.includes("info")) return "Recibir más información";
-  return null;
-}
-
-function askNombre() {
-  return "Gracias. ¿Cuál es tu nombre completo?";
-}
-
-function askEmpresa() {
-  return "Gracias. ¿Cuál es el nombre de tu empresa o taller?";
-}
-
-function askCiudad() {
-  return "Perfecto. ¿En qué ciudad/sucursal te gustaría atenderte? (Ej: CDMX, MTY, GDL...)";
-}
-
-/**
- * Lógica del bot (rápida).
- * Regresa: { replyText, done, leadData }
- */
-function botLogic(wa_id, incomingText) {
-  const text = norm(incomingText);
-
-  if (isResetCommand(text)) {
-    resetState(wa_id);
-    setState(wa_id, { step: "ASK_PRODUCTO", data: {} });
-    return { replyText: askProducto(), done: false, leadData: null };
-  }
-
-  const st = getState(wa_id);
-
-  if (st.step === "START") {
-    setState(wa_id, { step: "ASK_PRODUCTO", data: {} });
-    return { replyText: askProducto(), done: false, leadData: null };
-  }
-
-  if (st.step === "ASK_PRODUCTO") {
-    const producto = parseProducto(text);
-    if (!producto) return { replyText: "No entendí 😅 Responde con 1, 2 o 3.\n\n" + askProducto(), done: false, leadData: null };
-    st.data.producto = producto;
-    setState(wa_id, { step: "ASK_INTERES", data: st.data });
-    return { replyText: askInteres(), done: false, leadData: null };
-  }
-
-  if (st.step === "ASK_INTERES") {
-    const interes = parseInteres(text);
-    if (!interes) return { replyText: "No entendí 😅 Responde con 1, 2 o 3.\n\n" + askInteres(), done: false, leadData: null };
-    st.data.interes = interes;
-    setState(wa_id, { step: "ASK_NOMBRE", data: st.data });
-    return { replyText: askNombre(), done: false, leadData: null };
-  }
-
-  if (st.step === "ASK_NOMBRE") {
-    st.data.nombre = text;
-    setState(wa_id, { step: "ASK_EMPRESA", data: st.data });
-    return { replyText: askEmpresa(), done: false, leadData: null };
-  }
-
-  if (st.step === "ASK_EMPRESA") {
-    st.data.empresa = text;
-    setState(wa_id, { step: "ASK_CIUDAD", data: st.data });
-    return { replyText: askCiudad(), done: false, leadData: null };
-  }
-
-  if (st.step === "ASK_CIUDAD") {
-    st.data.ciudad = text;
-
-    setState(wa_id, { step: "DONE", data: st.data });
-
-    const leadData = {
-      wa_id: String(wa_id || ""),
-      telefono: wa_id ? `+${wa_id}` : "",
-      producto: String(st.data.producto || ""),
-      interes: String(st.data.interes || ""),
-      nombre: String(st.data.nombre || ""),
-      empresa: String(st.data.empresa || ""),
-      ciudad: String(st.data.ciudad || ""),
-      created_at_ms: nowMs(),
-    };
-
-    return {
-      replyText: "Listo ✅ Ya registré tus datos. En breve te contactamos. (Escribe 'menu' para reiniciar)",
-      done: true,
-      leadData,
-    };
-  }
-
-  // DONE
-  return { replyText: "Ya tengo tus datos ✅. Escribe 'menu' para reiniciar.", done: false, leadData: null };
-}
 
 module.exports = async function handler(req, res) {
   const send = (code, body = "OK") => {
@@ -212,8 +44,6 @@ module.exports = async function handler(req, res) {
 
   // ========= POST events =========
   if (req.method === "POST") {
-    const t0 = Date.now();
-
     try {
       const body = await readJsonBody();
       console.log("WEBHOOK_EVENT:", JSON.stringify(body, null, 2));
@@ -223,7 +53,6 @@ module.exports = async function handler(req, res) {
       const value = change?.value;
       const msg = value?.messages?.[0];
 
-      // statuses u otros eventos
       if (!msg) return send(200, "OK");
 
       // dedupe por message id
@@ -237,7 +66,7 @@ module.exports = async function handler(req, res) {
       if (msgId) SEEN.set(msgId, now + SEEN_TTL_MS);
 
       const from = msg?.from;
-      const text = msg?.text?.body || "";
+      const text = (msg?.text?.body || "").trim();
       const phoneNumberId = value?.metadata?.phone_number_id || process.env.WHATSAPP_PHONE_NUMBER_ID;
 
       const waToken = process.env.WHATSAPP_TOKEN;
@@ -246,46 +75,18 @@ module.exports = async function handler(req, res) {
         return send(200, "OK");
       }
 
-      // ✅ 1) Bot rápido (Node decide respuesta)
-      const { replyText, done, leadData } = botLogic(from, text);
-      console.log("BOT_REPLY:", replyText);
-      console.log("TIMER: before_send_ms", Date.now() - t0);
-
-      // ✅ 2) Enviar a WhatsApp (1 mensaje)
-      const waUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
-      const payload = {
-        messaging_product: "whatsapp",
-        to: from,
-        type: "text",
-        text: { body: replyText },
-      };
-
-      const waResp = await fetch(waUrl, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${waToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
+      const replyText = await handleFlowAndPersist({
+        wa_id: String(from),
+        userText: text,
       });
 
-      const waRespData = await waResp.json().catch(() => ({}));
-      console.log("SEND_RESPONSE:", waResp.status, JSON.stringify(waRespData, null, 2));
-      console.log("TIMER: after_send_ms", Date.now() - t0);
+      await sendWhatsAppText({
+        waToken,
+        phoneNumberId,
+        to: from,
+        body: replyText,
+      });
 
-      // ✅ 3) Guardar en Lark SOLO cuando termine el flujo
-      if (done && leadData) {
-        try {
-          await larkCreateLeadFromLeadData(leadData);
-          console.log("LARK_SYNC_OK");
-        } catch (e) {
-          console.error("LARK_SYNC_ERROR:", e?.message || e);
-        }
-      } else {
-        console.log("LARK_SAVE_SKIP:not_done");
-      }
-
-      console.log("TIMER: end_ms", Date.now() - t0);
       return send(200, "OK");
     } catch (err) {
       console.error("WEBHOOK_ERROR:", err?.message || err);
@@ -298,9 +99,277 @@ module.exports = async function handler(req, res) {
 };
 
 // =========================
-// LARK HELPERS
+// FLOW (Node) + Lark persistence (MISMA TABLA)
 // =========================
 
+const STAGES = {
+  ASK_BRANCH: "ASK_BRANCH",
+  ASK_PRODUCT: "ASK_PRODUCT",
+  ASK_INTENT: "ASK_INTENT",
+  ASK_NAME: "ASK_NAME",
+  ASK_COMPANY: "ASK_COMPANY",
+  ASK_LOCATION: "ASK_LOCATION",
+  ASK_PHONE: "ASK_PHONE",
+  ASK_EMAIL: "ASK_EMAIL",
+  COMPLETED: "COMPLETED",
+};
+
+function stageFieldName() {
+  return (process.env.LARK_STAGE_FIELD || "stage").trim();
+}
+
+function normalizeText(s) {
+  return String(s || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function isMenu(textNorm) {
+  return textNorm === "menu" || textNorm === "reiniciar" || textNorm === "reset";
+}
+
+function parseBranch(text) {
+  const t = normalizeText(text);
+  if (t === "1" || t.includes("cdmx") || t.includes("mexico") || t.includes("ciudad")) return "CDMX";
+  if (t === "2" || t.includes("mty") || t.includes("monterrey")) return "MTY";
+  return null;
+}
+
+function parseProduct(text) {
+  const t = normalizeText(text);
+  if (t === "1" || t.includes("limpi")) return "Limpiadoras láser";
+  if (t === "2" || t.includes("sold")) return "Soldadoras láser";
+  if (t === "3" || t.includes("marca")) return "Marcadoras láser";
+  if (t === "4" || t.includes("otro")) return "Otro";
+  return null;
+}
+
+function parseIntent(text) {
+  const t = normalizeText(text);
+  if (t === "1" || t.includes("cot")) return "Cotización";
+  if (t === "2" || t.includes("demo")) return "DEMO";
+  if (t === "3" || t.includes("info")) return "Más información";
+  return null;
+}
+
+function looksLikePhone(text) {
+  const digits = String(text || "").replace(/\D/g, "");
+  return digits.length >= 8;
+}
+function normalizePhone(text) {
+  return String(text || "").replace(/\D/g, "");
+}
+function looksLikeEmail(text) {
+  const t = String(text || "").trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t);
+}
+
+async function handleFlowAndPersist({ wa_id, userText }) {
+  const textNorm = normalizeText(userText);
+  const sf = stageFieldName();
+
+  // MENU / REINICIAR
+  if (isMenu(textNorm)) {
+    await larkCloseAnyOpenSession(wa_id).catch(() => {});
+    // creamos nueva sesión arrancando en sucursal
+    await larkCreateSession({ wa_id, stage: STAGES.ASK_BRANCH }).catch(() => {});
+    return [
+      "Listo. Reiniciamos tu solicitud.",
+      "",
+      "¿Con qué sucursal quieres continuar?",
+      "",
+      "1) CDMX",
+      "2) Monterrey",
+      "",
+      "Responde 1 o 2 (o escribe CDMX / MTY).",
+    ].join("\n");
+  }
+
+  // Buscar sesión abierta
+  let session = await larkFindOpenSession(wa_id);
+
+  // Si no hay sesión, crear y preguntar sucursal
+  if (!session) {
+    session = await larkCreateSession({ wa_id, stage: STAGES.ASK_BRANCH });
+  }
+
+  const { tableId, recordId, stage } = session;
+
+  const setStage = async (newStage) => {
+    await larkUpdateRecord(tableId, recordId, { [sf]: newStage });
+  };
+
+  const setFields = async (fields) => {
+    await larkUpdateRecord(tableId, recordId, fields);
+  };
+
+  // ===== STAGES =====
+  if (stage === STAGES.ASK_BRANCH) {
+    const branch = parseBranch(userText);
+    if (!branch) {
+      return [
+        "¿Con qué sucursal quieres continuar?",
+        "",
+        "1) CDMX",
+        "2) Monterrey",
+        "",
+        "Responde 1 o 2 (o escribe CDMX / MTY).",
+      ].join("\n");
+    }
+
+    // ✅ Guardamos sucursal como CAMPO (para que tus views filtren)
+    await setFields({ sucursal: branch, [sf]: STAGES.ASK_PRODUCT });
+
+    return [
+      `Perfecto ✅ Sucursal: ${branch}`,
+      "",
+      "Hola, gracias por contactar a FEIYANG MAQUINARIA.",
+      "Por favor selecciona una opción escribiendo el número:",
+      "1) Limpiadoras láser",
+      "2) Soldadoras láser",
+      "3) Marcadoras láser",
+      "4) Otro",
+    ].join("\n");
+  }
+
+  if (stage === STAGES.ASK_PRODUCT) {
+    const prod = parseProduct(userText);
+    if (!prod) {
+      return [
+        "Por favor selecciona una opción escribiendo el número:",
+        "1) Limpiadoras láser",
+        "2) Soldadoras láser",
+        "3) Marcadoras láser",
+        "4) Otro",
+      ].join("\n");
+    }
+    await setFields({ producto_interes: prod, [sf]: STAGES.ASK_INTENT });
+    return [
+      "Perfecto.",
+      "¿Qué te gustaría hacer?",
+      "1) Solicitar una cotización",
+      "2) Solicitar una DEMO",
+      "3) Recibir más información",
+    ].join("\n");
+  }
+
+  if (stage === STAGES.ASK_INTENT) {
+    const intent = parseIntent(userText);
+    if (!intent) {
+      return [
+        "¿Qué te gustaría hacer?",
+        "1) Solicitar una cotización",
+        "2) Solicitar una DEMO",
+        "3) Recibir más información",
+      ].join("\n");
+    }
+    await setFields({ intencion_cliente: intent, [sf]: STAGES.ASK_NAME });
+    return "Excelente elección.\nPara continuar, ¿podrías indicarnos tu nombre completo?";
+  }
+
+  if (stage === STAGES.ASK_NAME) {
+    const name = String(userText || "").trim();
+    if (name.length < 2) return "Para continuar, ¿podrías indicarnos tu nombre completo?";
+    await setFields({ nombre: name, [sf]: STAGES.ASK_COMPANY });
+    return "Gracias. ¿Cuál es el nombre de tu empresa o taller?";
+  }
+
+  if (stage === STAGES.ASK_COMPANY) {
+    const company = String(userText || "").trim();
+    if (company.length < 2) return "¿Cuál es el nombre de tu empresa o taller?";
+    await setFields({ empresa: company, [sf]: STAGES.ASK_LOCATION });
+    return "¿En qué ciudad y estado te encuentras?";
+  }
+
+  if (stage === STAGES.ASK_LOCATION) {
+    const loc = String(userText || "").trim();
+    if (loc.length < 2) return "¿En qué ciudad y estado te encuentras?";
+    await setFields({ ubicacion: loc, [sf]: STAGES.ASK_PHONE });
+    return "¿Cuál es tu número de teléfono para contactarte?";
+  }
+
+  if (stage === STAGES.ASK_PHONE) {
+    if (!looksLikePhone(userText)) return "¿Cuál es tu número de teléfono para contactarte?";
+    const phone = normalizePhone(userText);
+    await setFields({ telefono: phone, [sf]: STAGES.ASK_EMAIL });
+    return "Por último, ¿nos compartes tu correo electrónico?";
+  }
+
+  if (stage === STAGES.ASK_EMAIL) {
+    if (!looksLikeEmail(userText)) return "Por último, ¿nos compartes tu correo electrónico? (Ej: nombre@correo.com)";
+    const email = String(userText).trim();
+
+    await setFields({ email, [sf]: STAGES.COMPLETED });
+
+    const rec = await larkReadRecord(tableId, recordId).catch(() => null);
+    const f = rec?.fields || {};
+
+    return [
+      "¡Gracias! Hemos registrado tus datos:",
+      `Sucursal: ${f.sucursal || ""}`,
+      `- Nombre: ${f.nombre || ""}`,
+      `- Empresa: ${f.empresa || ""}`,
+      `- Ubicación: ${f.ubicacion || ""}`,
+      `- Teléfono: ${f.telefono || ""}`,
+      `- Email: ${f.email || ""}`,
+      "",
+      "En breve un asesor se pondrá en contacto contigo.",
+      "",
+      "(Escribe 'menu' para reiniciar)",
+    ].join("\n");
+  }
+
+  if (stage === STAGES.COMPLETED) {
+    return "Ya tengo tu solicitud registrada ✅\nEscribe 'menu' para reiniciar.";
+  }
+
+  // fallback
+  await setStage(STAGES.ASK_BRANCH).catch(() => {});
+  return [
+    "Listo. Reiniciamos tu solicitud.",
+    "",
+    "¿Con qué sucursal quieres continuar?",
+    "",
+    "1) CDMX",
+    "2) Monterrey",
+    "",
+    "Responde 1 o 2 (o escribe CDMX / MTY).",
+  ].join("\n");
+}
+
+// =========================
+// WhatsApp sender
+// =========================
+async function sendWhatsAppText({ waToken, phoneNumberId, to, body }) {
+  const waUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "text",
+    text: { body: String(body || "") },
+  };
+
+  const waResp = await fetch(waUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${waToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const waRespData = await waResp.json().catch(() => ({}));
+  console.log("SEND_RESPONSE:", waResp.status, JSON.stringify(waRespData, null, 2));
+  if (!waResp.ok) {
+    throw new Error(`WhatsApp send failed status=${waResp.status} body=${JSON.stringify(waRespData)}`);
+  }
+}
+
+// =========================
+// LARK HELPERS
+// =========================
 async function larkGetTenantToken() {
   const now = Date.now();
   if (LARK_CACHE.token && LARK_CACHE.expiresAtMs > now + 60000) return LARK_CACHE.token;
@@ -327,62 +396,33 @@ async function larkGetTenantToken() {
   return LARK_CACHE.token;
 }
 
-/**
- * ✅ Guardado flexible:
- * - Si defines variables de entorno con nombres EXACTOS de campo de Lark, se rellenan esas columnas.
- * - Si no defines nada, cae a campos "wa_id / created_at / nombre / telefono / mensaje" como antes.
- *
- * Variables opcionales (pon el nombre EXACTO del campo en tu Bitable):
- * - LARK_FIELD_WA_ID
- * - LARK_FIELD_CREATED_AT
- * - LARK_FIELD_PRODUCTO
- * - LARK_FIELD_INTERES
- * - LARK_FIELD_NOMBRE
- * - LARK_FIELD_EMPRESA
- * - LARK_FIELD_CIUDAD
- * - LARK_FIELD_TELEFONO
- *
- * Si no las pones, guardará:
- * - wa_id, created_at, nombre, telefono, mensaje (mensaje contiene todo en texto)
- */
-async function larkCreateLeadFromLeadData(lead) {
+function cleanAppToken(appTokenRaw) {
+  return String(appTokenRaw || "").split("?")[0].trim();
+}
+function getAppTokenOrThrow() {
   const appTokenRaw = process.env.LARK_APP_TOKEN;
+  if (!appTokenRaw) throw new Error("Missing LARK_APP_TOKEN");
+  return cleanAppToken(appTokenRaw);
+}
+function getTableIdOrThrow() {
   const tableId = process.env.LARK_TABLE_ID;
-  if (!appTokenRaw || !tableId) throw new Error("Missing LARK_APP_TOKEN or LARK_TABLE_ID");
+  if (!tableId) throw new Error("Missing LARK_TABLE_ID");
+  return tableId;
+}
 
-  const appToken = String(appTokenRaw).split("?")[0].trim();
+async function larkCreateSession({ wa_id, stage }) {
+  const appToken = getAppTokenOrThrow();
+  const tableId = getTableIdOrThrow();
   const tenantToken = await larkGetTenantToken();
+  const sf = stageFieldName();
 
   const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records`;
 
-  const fields = {};
-
-  // Mapeo por env (si existe)
-  const map = (envKey, value) => {
-    const fieldName = process.env[envKey];
-    if (fieldName && fieldName !== "0") fields[fieldName] = value;
+  const fields = {
+    wa_id: String(wa_id || ""),
+    created_at: Date.now(),
+    [sf]: String(stage || STAGES.ASK_BRANCH),
   };
-
-  map("LARK_FIELD_WA_ID", String(lead.wa_id || ""));
-  map("LARK_FIELD_CREATED_AT", Number(lead.created_at_ms || Date.now()));
-  map("LARK_FIELD_PRODUCTO", String(lead.producto || ""));
-  map("LARK_FIELD_INTERES", String(lead.interes || ""));
-  map("LARK_FIELD_NOMBRE", String(lead.nombre || ""));
-  map("LARK_FIELD_EMPRESA", String(lead.empresa || ""));
-  map("LARK_FIELD_CIUDAD", String(lead.ciudad || ""));
-  map("LARK_FIELD_TELEFONO", String(lead.telefono || ""));
-
-  // Fallback clásico (por si no pusiste mapeos)
-  if (Object.keys(fields).length === 0) {
-    fields.wa_id = String(lead.wa_id || "");
-    fields.created_at = Number(lead.created_at_ms || Date.now());
-    fields.nombre = String(lead.nombre || "");
-    fields.telefono = String(lead.telefono || "");
-    fields.mensaje = `producto=${lead.producto} | interes=${lead.interes} | empresa=${lead.empresa} | ciudad=${lead.ciudad}`;
-  } else {
-    // Aun con mapeo, metemos mensaje por si quieres histórico (si existe ese campo)
-    map("LARK_FIELD_MENSAJE", `producto=${lead.producto} | interes=${lead.interes} | empresa=${lead.empresa} | ciudad=${lead.ciudad}`);
-  }
 
   const resp = await fetch(url, {
     method: "POST",
@@ -394,10 +434,94 @@ async function larkCreateLeadFromLeadData(lead) {
   });
 
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok || data?.code !== 0) {
+  if (!resp.ok || data?.code !== 0 || !data?.data?.record?.record_id) {
     throw new Error(`Lark create record error: status=${resp.status} body=${JSON.stringify(data)}`);
   }
 
-  console.log("LARK_SAVED:", JSON.stringify(data, null, 2));
+  return {
+    tableId,
+    recordId: data.data.record.record_id,
+    stage: fields[sf],
+  };
+}
+
+async function larkUpdateRecord(tableId, recordId, fields) {
+  const appToken = getAppTokenOrThrow();
+  const tenantToken = await larkGetTenantToken();
+
+  const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records/${recordId}`;
+  const resp = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${tenantToken}`,
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify({ fields }),
+  });
+
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || data?.code !== 0) {
+    throw new Error(`Lark update record error: status=${resp.status} body=${JSON.stringify(data)}`);
+  }
   return data;
+}
+
+async function larkReadRecord(tableId, recordId) {
+  const appToken = getAppTokenOrThrow();
+  const tenantToken = await larkGetTenantToken();
+
+  const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records/${recordId}`;
+  const resp = await fetch(url, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${tenantToken}` },
+  });
+
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || data?.code !== 0) {
+    throw new Error(`Lark read record error: status=${resp.status} body=${JSON.stringify(data)}`);
+  }
+  return data?.data?.record || null;
+}
+
+async function larkFindOpenSession(wa_id) {
+  const appToken = getAppTokenOrThrow();
+  const tableId = getTableIdOrThrow();
+  const tenantToken = await larkGetTenantToken();
+  const sf = stageFieldName();
+
+  const filter = `CurrentValue.[wa_id] = "${String(wa_id).replace(/"/g, '\\"')}" AND CurrentValue.[${sf}] != "${STAGES.COMPLETED}"`;
+
+  const url =
+    `https://open.larksuite.com/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records` +
+    `?page_size=20&filter=${encodeURIComponent(filter)}`;
+
+  const resp = await fetch(url, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${tenantToken}` },
+  });
+
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || data?.code !== 0) {
+    throw new Error(`Lark list records error: status=${resp.status} body=${JSON.stringify(data)}`);
+  }
+
+  const items = data?.data?.items || [];
+  if (!items.length) return null;
+
+  items.sort((a, b) => Number(b?.fields?.created_at || 0) - Number(a?.fields?.created_at || 0));
+  const rec = items[0];
+  const stage = rec?.fields?.[sf] || STAGES.ASK_BRANCH;
+
+  return {
+    tableId,
+    recordId: rec.record_id,
+    stage: String(stage),
+  };
+}
+
+async function larkCloseAnyOpenSession(wa_id) {
+  const s = await larkFindOpenSession(wa_id);
+  if (!s) return;
+  const sf = stageFieldName();
+  await larkUpdateRecord(s.tableId, s.recordId, { [sf]: "CLOSED_BY_MENU" });
 }
