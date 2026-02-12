@@ -3,6 +3,12 @@
 
 let LARK_CACHE = { token: null, expiresAtMs: 0 };
 
+// Cache de metadata de fields para:
+// - Convertir selects a option_id
+// - Formatear fechas según el tipo real del campo
+let LARK_FIELDS_CACHE = { byName: null, loadedAtMs: 0 };
+const LARK_FIELDS_TTL_MS = 60 * 60 * 1000; // 1 hora cache por instancia
+
 // dedupe simple en memoria (sirve por instancia)
 const SEEN = new Map(); // msgId -> expiresAt
 const SEEN_TTL_MS = 5 * 60 * 1000;
@@ -133,7 +139,10 @@ module.exports = async function handler(req, res) {
 
       const from = msg?.from; // wa_id
       const text = msg?.text?.body || "";
-      const phoneNumberId = value?.metadata?.phone_number_id || process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID;
+      const phoneNumberId =
+        value?.metadata?.phone_number_id ||
+        process.env.WHATSAPP_PHONE_NUMBER_ID ||
+        process.env.PHONE_NUMBER_ID;
 
       const waToken = process.env.WHATSAPP_TOKEN;
       if (!waToken || !phoneNumberId || !from) {
@@ -142,7 +151,6 @@ module.exports = async function handler(req, res) {
       }
 
       const waUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
-
       const t = norm(text);
 
       // reiniciar/menu
@@ -263,7 +271,7 @@ En breve un asesor se pondrá en contacto contigo.
       // ======= Responder WhatsApp (rápido) =======
       await sendWhatsAppText(waUrl, waToken, from, reply);
 
-      // ======= Guardar en Lark SOLO al finalizar (SIN LIST/FILTER) =======
+      // ======= Guardar en Lark SOLO al finalizar (después de WhatsApp) =======
       if (completed) {
         try {
           const d = sess.data;
@@ -329,7 +337,7 @@ async function sendWhatsAppText(waUrl, waToken, to, bodyText) {
 }
 
 // =========================
-// LARK HELPERS (solo CREATE, sin list/filter)
+// LARK HELPERS (solo CREATE + lectura de fields para tipado)
 // =========================
 
 async function larkGetTenantToken() {
@@ -358,6 +366,101 @@ async function larkGetTenantToken() {
   return LARK_CACHE.token;
 }
 
+// Trae metadata de fields (para saber si un campo es Select / Date / Text, etc.)
+async function larkGetFieldsByName(appToken, tableId) {
+  const now = Date.now();
+  if (LARK_FIELDS_CACHE.byName && (now - (LARK_FIELDS_CACHE.loadedAtMs || 0)) < LARK_FIELDS_TTL_MS) {
+    return LARK_FIELDS_CACHE.byName;
+  }
+
+  const tenantToken = await larkGetTenantToken();
+  const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/fields?page_size=200`;
+
+  const resp = await fetch(url, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${tenantToken}` },
+  });
+
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || data?.code !== 0) {
+    throw new Error(`Lark list fields error: status=${resp.status} body=${JSON.stringify(data)}`);
+  }
+
+  const items = data?.data?.items || [];
+  const byName = {};
+  for (const f of items) {
+    if (f?.field_name) byName[f.field_name] = f;
+  }
+
+  LARK_FIELDS_CACHE.byName = byName;
+  LARK_FIELDS_CACHE.loadedAtMs = Date.now();
+  return byName;
+}
+
+function pickSelectOptionId(fieldMeta, desiredText) {
+  const opts = fieldMeta?.property?.options;
+  if (!Array.isArray(opts)) return null;
+
+  const want = String(desiredText || "").trim().toLowerCase();
+  if (!want) return null;
+
+  const hit = opts.find(o => String(o?.name || "").trim().toLowerCase() === want);
+  return hit?.id || null;
+}
+
+function toYYYYMMDD(ms) {
+  const d = new Date(Number(ms || Date.now()));
+  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+// Decide si un campo de fecha parece DATE o DATETIME según su formatter
+function dateFieldWantsDatetime(fieldMeta) {
+  const fmt = String(fieldMeta?.property?.date_formatter || fieldMeta?.property?.formatter || "");
+  const f = fmt.toLowerCase();
+  // heurística: si incluye hora/minutos o ":" => datetime
+  return f.includes("hh") || f.includes("mm") || f.includes(":") || f.includes("ss");
+}
+
+// Coerción segura por metadata (evita TextFieldConvFail y DatetimeFieldConvFail)
+function coerceToLarkValue(fieldMeta, rawValue, fieldNameForLog) {
+  if (rawValue === undefined) return undefined;
+
+  // Si el campo no existe en metadata, no lo mandamos (evita fallos por nombres)
+  if (!fieldMeta) return undefined;
+
+  // SELECT (single/multi): property.options existe
+  if (Array.isArray(fieldMeta?.property?.options)) {
+    const optId = pickSelectOptionId(fieldMeta, rawValue);
+    if (optId) return optId;
+
+    // Si no encontramos option_id, log y regresamos texto (para que veas el mismatch exacto)
+    console.log("LARK_SELECT_NO_MATCH:", {
+      field: fieldNameForLog,
+      value: String(rawValue || ""),
+      options: (fieldMeta.property.options || []).map(o => o?.name).slice(0, 50),
+    });
+    // fallback: mandar texto puede fallar; preferimos mandar undefined para no romper el create
+    return undefined;
+  }
+
+  // FECHA / DATETIME: property.date_formatter suele existir
+  if (fieldMeta?.property?.date_formatter || fieldMeta?.property?.formatter) {
+    const wantsDatetime = dateFieldWantsDatetime(fieldMeta);
+    if (wantsDatetime) {
+      // Lark suele aceptar unix ms en datetime
+      return Number(rawValue || Date.now());
+    }
+    // Date-only: enviar "YYYY-MM-DD"
+    const ms = Number(rawValue || Date.now());
+    return toYYYYMMDD(ms);
+  }
+
+  // Default: texto
+  // (Si el campo fuera numérico, Lark normalmente acepta number; pero tus columnas principales son texto/select/date)
+  if (rawValue === null) return "";
+  return String(rawValue);
+}
+
 async function larkCreateLead({
   wa_id,
   created_at_ms,
@@ -379,33 +482,39 @@ async function larkCreateLead({
 
   const appToken = String(appTokenRaw).split("?")[0].trim();
   const tenantToken = await larkGetTenantToken();
+  const fieldsByName = await larkGetFieldsByName(appToken, tableId);
 
   const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records`;
 
-  // OJO: usamos exactamente los nombres de columna que tú mostraste en Lark
-const createdAt = new Date(created_at_ms || Date.now());
-const createdAtYYYYMMDD = createdAt.toISOString().slice(0, 10); // "2026-02-12"
-
-const syncedAt = new Date();
-const syncedAtYYYYMMDD = syncedAt.toISOString().slice(0, 10);
-
-  const fields = {
-    wa_id: String(wa_id || ""),
-    created_at: Number(created_at_ms || Date.now()),
-    sucursal: String(sucursal || ""),
-    producto_interes: String(producto_interes || ""),
-    intencion_cliente: String(intencion_cliente || ""),
-    nombre: String(nombre || ""),
-    empresa: String(empresa || ""),
-    ubicacion: String(ubicacion || ""),
-    telefono: String(telefono || ""),
-    email: String(email || ""),
-    mensaje: String(mensaje || ""),
-    stage: String(stage || "COMPLETED"),
+  // Valores "crudos"
+  const raw = {
+    wa_id,
+    created_at: created_at_ms,           // lo convertimos según tipo real
+    sucursal,
+    producto_interes,
+    intencion_cliente,
+    nombre,
+    empresa,
+    ubicacion,
+    telefono,
+    email,
+    mensaje,
+    stage: stage || "COMPLETED",
     lark_status: "OK",
-    lark_synced_at: Number(Date.now()),
+    lark_synced_at: Date.now(),          // lo convertimos según tipo real
     lark_error: "",
   };
+
+  // Construimos fields SOLO con columnas que existan y con tipo correcto
+  const fields = {};
+  for (const [k, v] of Object.entries(raw)) {
+    const meta = fieldsByName[k];
+    const coerced = coerceToLarkValue(meta, v, k);
+    if (coerced !== undefined) fields[k] = coerced;
+  }
+
+  // Log útil para depurar (sin exponer tokens)
+  console.log("LARK_FIELDS_PAYLOAD_KEYS:", Object.keys(fields));
 
   const resp = await fetch(url, {
     method: "POST",
