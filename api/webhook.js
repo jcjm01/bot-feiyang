@@ -4,11 +4,14 @@
 //          -> (C) Reply to WhatsApp
 
 // api/webhook.js
+const { waitUntil } = require("@vercel/functions");
 
 let LARK_CACHE = { token: null, expiresAtMs: 0 };
 // dedupe simple en memoria (sirve por instancia)
 const SEEN = new Map(); // msgId -> expiresAt
 const SEEN_TTL_MS = 5 * 60 * 1000;
+
+
 
 module.exports = async function handler(req, res) {
   const send = (code, body = "OK") => {
@@ -84,113 +87,114 @@ module.exports = async function handler(req, res) {
       // ✅ 1) ACK rápido al webhook para evitar reintentos
       send(200, "OK");
 
-      // seguimos en “background”
-      (async () => {
-        try {
-          const waUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
+// ✅ trabajo en “background” soportado por Vercel
+waitUntil((async () => {
+  try {
+    const waUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
 
-          // (opcional) mensaje inmediato si quieres “sensación instantánea”
-          // comenta este bloque si no lo quieres
-          await fetch(waUrl, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${waToken}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              messaging_product: "whatsapp",
-              to: from,
-              type: "text",
-              text: { body: "Perfecto, dame un segundo…" },
-            }),
-          }).catch(() => {});
+    // (opcional) mensaje inmediato si quieres “sensación instantánea”
+    // comenta este bloque si no lo quieres
+    await fetch(waUrl, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${waToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: from,
+        type: "text",
+        text: { body: "Perfecto, dame un segundo…" },
+      }),
+    }).catch(() => {});
 
-          console.log("TIMER: start->before_apps", Date.now() - t0);
+    console.log("TIMER: start->before_apps", Date.now() - t0);
 
-          // ========= (A) Apps Script flow =========
-          const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
-          const BOT_SHARED_SECRET = process.env.BOT_SHARED_SECRET;
+    // ========= (A) Apps Script flow =========
+    const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
+    const BOT_SHARED_SECRET = process.env.BOT_SHARED_SECRET;
 
-          let replyText = "";
+    let replyText = "";
 
-          if (!APPS_SCRIPT_URL || !BOT_SHARED_SECRET) {
-            replyText = `Recibido: ${text || "(sin texto)"}`;
-          } else {
-            const url =
-              APPS_SCRIPT_URL +
-              (APPS_SCRIPT_URL.includes("?") ? "&" : "?") +
-              "k=" + encodeURIComponent(BOT_SHARED_SECRET);
+    if (!APPS_SCRIPT_URL || !BOT_SHARED_SECRET) {
+      replyText = `Recibido: ${text || "(sin texto)"}`;
+    } else {
+      const url =
+        APPS_SCRIPT_URL +
+        (APPS_SCRIPT_URL.includes("?") ? "&" : "?") +
+        "k=" + encodeURIComponent(BOT_SHARED_SECRET);
 
-            const resp = await fetch(url, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(body),
-            });
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
 
-            const raw = await resp.text();
-            console.log("APPS_SCRIPT_STATUS:", resp.status);
-            console.log("APPS_SCRIPT_RAW:", raw);
+      const raw = await resp.text();
+      console.log("APPS_SCRIPT_STATUS:", resp.status);
+      console.log("APPS_SCRIPT_RAW:", raw);
 
-            let data = null;
-            try { data = JSON.parse(raw); } catch {}
-            replyText = data?.reply || `Recibido: ${text || "(sin texto)"}`;
-          }
+      let data = null;
+      try { data = JSON.parse(raw); } catch {}
+      replyText = data?.reply || `Recibido: ${text || "(sin texto)"}`;
+    }
 
-          console.log("TIMER: after_apps", Date.now() - t0);
+    console.log("TIMER: after_apps", Date.now() - t0);
 
-          // ========= (C) Reply to WhatsApp (ANTES de Lark) =========
-          const payload = {
-            messaging_product: "whatsapp",
-            to: from,
-            type: "text",
-            text: { body: replyText },
-          };
+    // ========= (C) Reply to WhatsApp (ANTES de Lark) =========
+    const payload = {
+      messaging_product: "whatsapp",
+      to: from,
+      type: "text",
+      text: { body: replyText },
+    };
 
-          const waResp = await fetch(waUrl, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${waToken}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(payload),
-          });
+    const waResp = await fetch(waUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${waToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
 
-          const waRespData = await waResp.json().catch(() => ({}));
-          console.log("SEND_RESPONSE:", waResp.status, JSON.stringify(waRespData, null, 2));
-          console.log("TIMER: after_send", Date.now() - t0);
+    const waRespData = await waResp.json().catch(() => ({}));
+    console.log("SEND_RESPONSE:", waResp.status, JSON.stringify(waRespData, null, 2));
+    console.log("TIMER: after_send", Date.now() - t0);
 
-          // ========= (B) Sync to Lark (DESPUÉS de mandar WhatsApp) =========
-          const looksCompleted =
-            typeof replyText === "string" &&
-            replyText.includes("Hemos registrado tus datos");
+    // ========= (B) Sync to Lark (DESPUÉS de mandar WhatsApp) =========
+    const looksCompleted =
+      typeof replyText === "string" &&
+      replyText.includes("Hemos registrado tus datos");
 
-          if (looksCompleted) {
-            try {
-              const contactName =
-                value?.contacts?.[0]?.profile?.name ||
-                value?.contacts?.[0]?.profile?.formatted_name ||
-                "";
+    if (looksCompleted) {
+      try {
+        const contactName =
+          value?.contacts?.[0]?.profile?.name ||
+          value?.contacts?.[0]?.profile?.formatted_name ||
+          "";
 
-              await larkCreateLead({
-                wa_id: String(from || ""),
-                nombre: String(contactName || ""),
-                telefono: from ? `+${from}` : "",
-                mensaje: String(text || ""),
-                created_at_ms: Date.now(),
-              });
+        await larkCreateLead({
+          wa_id: String(from || ""),
+          nombre: String(contactName || ""),
+          telefono: from ? `+${from}` : "",
+          mensaje: String(text || ""),
+          created_at_ms: Date.now(),
+        });
 
-              console.log("LARK_SYNC_OK");
-            } catch (e) {
-              console.error("LARK_SYNC_ERROR:", e?.message || e);
-            }
-          } else {
-            console.log("LARK_SYNC_SKIP:not_completed");
-          }
+        console.log("LARK_SYNC_OK");
+      } catch (e) {
+        console.error("LARK_SYNC_ERROR:", e?.message || e);
+      }
+    } else {
+      console.log("LARK_SYNC_SKIP:not_completed");
+    }
 
-          console.log("TIMER: end", Date.now() - t0);
-        } catch (e) {
-          console.error("BG_ERROR:", e?.message || e);
-        }
-      })();
+    console.log("TIMER: end", Date.now() - t0);
+  } catch (e) {
+    console.error("BG_ERROR:", e?.message || e);
+  }
+})());
 
-      return; // ya respondimos
+return; // ya respondimos
+
     } catch (err) {
       console.error("WEBHOOK_ERROR:", err?.message || err);
       return send(200, "OK");
