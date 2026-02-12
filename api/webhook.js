@@ -3,7 +3,12 @@
 //          -> (B) Sync to Lark when FLOW_COMPLETED (heurística)
 //          -> (C) Reply to WhatsApp
 
+// api/webhook.js
+
 let LARK_CACHE = { token: null, expiresAtMs: 0 };
+// dedupe simple en memoria (sirve por instancia)
+const SEEN = new Map(); // msgId -> expiresAt
+const SEEN_TTL_MS = 5 * 60 * 1000;
 
 module.exports = async function handler(req, res) {
   const send = (code, body = "OK") => {
@@ -25,28 +30,25 @@ module.exports = async function handler(req, res) {
   };
 
   // ========= GET verify =========
-if (req.method === "GET") {
-  const mode = req.query?.["hub.mode"];
-  const token = req.query?.["hub.verify_token"];
-  const challenge = req.query?.["hub.challenge"];
-  const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+  if (req.method === "GET") {
+    const mode = req.query?.["hub.mode"];
+    const token = req.query?.["hub.verify_token"];
+    const challenge = req.query?.["hub.challenge"];
+    const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 
-  // 1) Challenge de Meta
-  if (mode === "subscribe") {
-    if (token && VERIFY_TOKEN && token === VERIFY_TOKEN) {
-      return send(200, String(challenge || ""));
+    if (mode === "subscribe") {
+      if (token && VERIFY_TOKEN && token === VERIFY_TOKEN) {
+        return send(200, String(challenge || ""));
+      }
+      return send(403, "Forbidden");
     }
-    // Si es challenge pero token incorrecto, aquí sí mantenemos 403
-    return send(403, "Forbidden");
+    return send(200, "ok");
   }
-
-  // 2) Cualquier otro GET (debug/healthcheck) -> 200
-  return send(200, "ok");
-}
-
 
   // ========= POST events =========
   if (req.method === "POST") {
+    const t0 = Date.now();
+
     try {
       const body = await readJsonBody();
       console.log("WEBHOOK_EVENT:", JSON.stringify(body, null, 2));
@@ -56,114 +58,139 @@ if (req.method === "GET") {
       const value = change?.value;
       const msg = value?.messages?.[0];
 
-      // A veces llegan "statuses" sin mensajes
+      // statuses u otros eventos
       if (!msg) return send(200, "OK");
+
+      const msgId = msg?.id;
+      const now = Date.now();
+      // limpiar expirados
+      for (const [k, exp] of SEEN) if (exp <= now) SEEN.delete(k);
+      if (msgId && SEEN.has(msgId)) {
+        console.log("DEDUP_SKIP:", msgId);
+        return send(200, "OK");
+      }
+      if (msgId) SEEN.set(msgId, now + SEEN_TTL_MS);
 
       const from = msg?.from;
       const text = msg?.text?.body || "";
       const phoneNumberId = value?.metadata?.phone_number_id || process.env.WHATSAPP_PHONE_NUMBER_ID;
 
-
-      // ========= (A) Apps Script flow =========
-      const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
-      const BOT_SHARED_SECRET = process.env.BOT_SHARED_SECRET;
-
-      let replyText = "";
-
-      if (!APPS_SCRIPT_URL) {
-        console.log("MISSING_APPS_SCRIPT_URL");
-        replyText = `Recibido: ${text || "(sin texto)"}`;
-      } else if (!BOT_SHARED_SECRET) {
-        console.log("MISSING_BOT_SHARED_SECRET");
-        replyText = `Recibido: ${text || "(sin texto)"}`;
-      } else {
-        try {
-          const url =
-            APPS_SCRIPT_URL +
-            (APPS_SCRIPT_URL.includes("?") ? "&" : "?") +
-            "k=" +
-            encodeURIComponent(BOT_SHARED_SECRET);
-
-          const resp = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          });
-
-          const raw = await resp.text();
-          console.log("APPS_SCRIPT_STATUS:", resp.status);
-          console.log("APPS_SCRIPT_RAW:", raw);
-
-          let data = null;
-          try { data = JSON.parse(raw); } catch {}
-
-          replyText = data?.reply || `Recibido: ${text || "(sin texto)"}`;
-        } catch (e) {
-          console.error("APPS_SCRIPT_ERROR:", e?.message || e);
-          replyText = `Recibido: ${text || "(sin texto)"}`;
-        }
-      }
-
-      // ========= (B) Sync to Lark (cuando el flujo terminó) =========
-      const looksCompleted =
-        typeof replyText === "string" &&
-        replyText.includes("Hemos registrado tus datos");
-
-      if (looksCompleted) {
-        try {
-          const contactName =
-            value?.contacts?.[0]?.profile?.name ||
-            value?.contacts?.[0]?.profile?.formatted_name ||
-            "";
-
-          await larkCreateLead({
-            wa_id: String(from || ""),
-            nombre: String(contactName || ""),
-            telefono: from ? `+${from}` : "",
-            mensaje: String(text || ""),
-            created_at_ms: Date.now(),
-          });
-
-          console.log("LARK_SYNC_OK");
-        } catch (e) {
-          console.error("LARK_SYNC_ERROR:", e?.message || e);
-        }
-      } else {
-        console.log("LARK_SYNC_SKIP:not_completed");
-      }
-
-      // ========= (C) Reply to WhatsApp =========
       const waToken = process.env.WHATSAPP_TOKEN;
       if (!waToken || !phoneNumberId || !from) {
-        console.log("MISSING_WHATSAPP_DATA:", {
-          hasToken: !!waToken,
-          phoneNumberId,
-          from,
-        });
+        console.log("MISSING_WHATSAPP_DATA:", { hasToken: !!waToken, phoneNumberId, from });
         return send(200, "OK");
       }
 
-      const waUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
-      const payload = {
-        messaging_product: "whatsapp",
-        to: from,
-        type: "text",
-        text: { body: replyText },
-      };
+      // ✅ 1) ACK rápido al webhook para evitar reintentos
+      send(200, "OK");
 
-      const waResp = await fetch(waUrl, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${waToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
+      // seguimos en “background”
+      (async () => {
+        try {
+          const waUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
 
-      const waRespData = await waResp.json().catch(() => ({}));
-      console.log("SEND_RESPONSE:", waResp.status, JSON.stringify(waRespData, null, 2));
+          // (opcional) mensaje inmediato si quieres “sensación instantánea”
+          // comenta este bloque si no lo quieres
+          await fetch(waUrl, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${waToken}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              messaging_product: "whatsapp",
+              to: from,
+              type: "text",
+              text: { body: "Perfecto, dame un segundo…" },
+            }),
+          }).catch(() => {});
 
-      return send(200, "OK");
+          console.log("TIMER: start->before_apps", Date.now() - t0);
+
+          // ========= (A) Apps Script flow =========
+          const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
+          const BOT_SHARED_SECRET = process.env.BOT_SHARED_SECRET;
+
+          let replyText = "";
+
+          if (!APPS_SCRIPT_URL || !BOT_SHARED_SECRET) {
+            replyText = `Recibido: ${text || "(sin texto)"}`;
+          } else {
+            const url =
+              APPS_SCRIPT_URL +
+              (APPS_SCRIPT_URL.includes("?") ? "&" : "?") +
+              "k=" + encodeURIComponent(BOT_SHARED_SECRET);
+
+            const resp = await fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+
+            const raw = await resp.text();
+            console.log("APPS_SCRIPT_STATUS:", resp.status);
+            console.log("APPS_SCRIPT_RAW:", raw);
+
+            let data = null;
+            try { data = JSON.parse(raw); } catch {}
+            replyText = data?.reply || `Recibido: ${text || "(sin texto)"}`;
+          }
+
+          console.log("TIMER: after_apps", Date.now() - t0);
+
+          // ========= (C) Reply to WhatsApp (ANTES de Lark) =========
+          const payload = {
+            messaging_product: "whatsapp",
+            to: from,
+            type: "text",
+            text: { body: replyText },
+          };
+
+          const waResp = await fetch(waUrl, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${waToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+
+          const waRespData = await waResp.json().catch(() => ({}));
+          console.log("SEND_RESPONSE:", waResp.status, JSON.stringify(waRespData, null, 2));
+          console.log("TIMER: after_send", Date.now() - t0);
+
+          // ========= (B) Sync to Lark (DESPUÉS de mandar WhatsApp) =========
+          const looksCompleted =
+            typeof replyText === "string" &&
+            replyText.includes("Hemos registrado tus datos");
+
+          if (looksCompleted) {
+            try {
+              const contactName =
+                value?.contacts?.[0]?.profile?.name ||
+                value?.contacts?.[0]?.profile?.formatted_name ||
+                "";
+
+              await larkCreateLead({
+                wa_id: String(from || ""),
+                nombre: String(contactName || ""),
+                telefono: from ? `+${from}` : "",
+                mensaje: String(text || ""),
+                created_at_ms: Date.now(),
+              });
+
+              console.log("LARK_SYNC_OK");
+            } catch (e) {
+              console.error("LARK_SYNC_ERROR:", e?.message || e);
+            }
+          } else {
+            console.log("LARK_SYNC_SKIP:not_completed");
+          }
+
+          console.log("TIMER: end", Date.now() - t0);
+        } catch (e) {
+          console.error("BG_ERROR:", e?.message || e);
+        }
+      })();
+
+      return; // ya respondimos
     } catch (err) {
       console.error("WEBHOOK_ERROR:", err?.message || err);
       return send(200, "OK");
@@ -173,6 +200,9 @@ if (req.method === "GET") {
   res.setHeader("Allow", "GET, POST");
   return send(405, "Method Not Allowed");
 };
+
+// ... tus helpers de Lark iguales ...
+
 
 // =========================
 // LARK HELPERS
