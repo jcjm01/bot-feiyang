@@ -1,11 +1,75 @@
 // api/webhook.js (Vercel - CommonJS)
-// Flujo rápido en Node + Persistencia en Lark (MISMA TABLA, filtrado por campo "sucursal")
+// WhatsApp -> Node (cuestionario rápido) -> (Lark create record al finalizar) -> Reply WhatsApp
 
 let LARK_CACHE = { token: null, expiresAtMs: 0 };
 
 // dedupe simple en memoria (sirve por instancia)
 const SEEN = new Map(); // msgId -> expiresAt
 const SEEN_TTL_MS = 5 * 60 * 1000;
+
+// estado en memoria por wa_id (para pruebas). En serverless puede resetear si cambia instancia.
+const SESS = new Map(); // wa_id -> { step, data, updatedAt }
+const SESS_TTL_MS = 30 * 60 * 1000;
+
+function norm(s) {
+  return String(s || "").trim().toLowerCase();
+}
+
+function cleanupMaps() {
+  const now = Date.now();
+  for (const [k, exp] of SEEN) if (exp <= now) SEEN.delete(k);
+  for (const [wa, sess] of SESS) if ((sess?.updatedAt || 0) + SESS_TTL_MS <= now) SESS.delete(wa);
+}
+
+function startSession(wa) {
+  const sess = { step: "SUCURSAL", data: {}, updatedAt: Date.now() };
+  SESS.set(wa, sess);
+  return sess;
+}
+
+function getSession(wa) {
+  const sess = SESS.get(wa);
+  if (!sess) return null;
+  sess.updatedAt = Date.now();
+  return sess;
+}
+
+// ====== Preguntas (mismo estilo que tu screenshot) ======
+function msgSucursal() {
+  return (
+`Listo. Reiniciamos tu solicitud.
+
+¿Con qué sucursal quieres continuar?
+
+1) CDMX
+2) Monterrey
+
+Responde 1 o 2 (o escribe CDMX / MTY).`
+  );
+}
+
+function msgProducto() {
+  return (
+`Hola, gracias por contactar a FEIYANG MAQUINARIA.
+Por favor selecciona una opción escribiendo el número:
+
+1) Limpiadoras láser
+2) Soldadoras láser
+3) Marcadoras láser
+4) Otro`
+  );
+}
+
+function msgIntencion() {
+  return (
+`Perfecto.
+¿Qué te gustaría hacer?
+
+1) Solicitar una cotización
+2) Solicitar una DEMO
+3) Recibir más información`
+  );
+}
 
 module.exports = async function handler(req, res) {
   const send = (code, body = "OK") => {
@@ -45,6 +109,8 @@ module.exports = async function handler(req, res) {
   // ========= POST events =========
   if (req.method === "POST") {
     try {
+      cleanupMaps();
+
       const body = await readJsonBody();
       console.log("WEBHOOK_EVENT:", JSON.stringify(body, null, 2));
 
@@ -53,21 +119,21 @@ module.exports = async function handler(req, res) {
       const value = change?.value;
       const msg = value?.messages?.[0];
 
+      // statuses u otros eventos
       if (!msg) return send(200, "OK");
 
       // dedupe por message id
       const msgId = msg?.id;
       const now = Date.now();
-      for (const [k, exp] of SEEN) if (exp <= now) SEEN.delete(k);
       if (msgId && SEEN.has(msgId)) {
         console.log("DEDUP_SKIP:", msgId);
         return send(200, "OK");
       }
       if (msgId) SEEN.set(msgId, now + SEEN_TTL_MS);
 
-      const from = msg?.from;
-      const text = (msg?.text?.body || "").trim();
-      const phoneNumberId = value?.metadata?.phone_number_id || process.env.WHATSAPP_PHONE_NUMBER_ID;
+      const from = msg?.from; // wa_id
+      const text = msg?.text?.body || "";
+      const phoneNumberId = value?.metadata?.phone_number_id || process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID;
 
       const waToken = process.env.WHATSAPP_TOKEN;
       if (!waToken || !phoneNumberId || !from) {
@@ -75,17 +141,156 @@ module.exports = async function handler(req, res) {
         return send(200, "OK");
       }
 
-      const replyText = await handleFlowAndPersist({
-        wa_id: String(from),
-        userText: text,
-      });
+      const waUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
 
-      await sendWhatsAppText({
-        waToken,
-        phoneNumberId,
-        to: from,
-        body: replyText,
-      });
+      const t = norm(text);
+
+      // reiniciar/menu
+      if (t === "menu" || t === "reiniciar" || t === "reset" || t === "inicio") {
+        const sess = startSession(from);
+        sess.updatedAt = Date.now();
+
+        await sendWhatsAppText(waUrl, waToken, from, msgSucursal());
+        return send(200, "OK");
+      }
+
+      // obtener sesión o iniciar
+      let sess = getSession(from);
+      if (!sess) sess = startSession(from);
+
+      let reply = "";
+      let completed = false;
+
+      // ======= Máquina de estados =======
+      if (sess.step === "SUCURSAL") {
+        let suc = "";
+        if (t === "1" || t.includes("cdmx")) suc = "CDMX";
+        else if (t === "2" || t.includes("mty") || t.includes("monterrey")) suc = "MTY";
+
+        if (!suc) {
+          reply = msgSucursal();
+        } else {
+          sess.data.sucursal = suc;
+          sess.step = "PRODUCTO";
+          reply = `Perfecto ✅ Sucursal: ${suc}\n\n` + msgProducto();
+        }
+      }
+
+      else if (sess.step === "PRODUCTO") {
+        let prod = "";
+        if (t === "1") prod = "Limpiadoras láser";
+        else if (t === "2") prod = "Soldadoras láser";
+        else if (t === "3") prod = "Marcadoras láser";
+        else if (t === "4" || t.includes("otro")) prod = "Otro";
+
+        if (!prod) {
+          reply = msgProducto();
+        } else {
+          sess.data.producto_interes = prod;
+          sess.step = "INTENCION";
+          reply = msgIntencion();
+        }
+      }
+
+      else if (sess.step === "INTENCION") {
+        let intent = "";
+        if (t === "1") intent = "Cotización";
+        else if (t === "2") intent = "DEMO";
+        else if (t === "3") intent = "Más información";
+
+        if (!intent) {
+          reply = msgIntencion();
+        } else {
+          sess.data.intencion_cliente = intent;
+          sess.step = "NOMBRE";
+          reply = "Excelente elección.\nPara continuar, ¿podrías indicarnos tu nombre completo?";
+        }
+      }
+
+      else if (sess.step === "NOMBRE") {
+        sess.data.nombre = String(text || "").trim();
+        sess.step = "EMPRESA";
+        reply = "Gracias. ¿Cuál es el nombre de tu empresa o taller?";
+      }
+
+      else if (sess.step === "EMPRESA") {
+        sess.data.empresa = String(text || "").trim();
+        sess.step = "UBICACION";
+        reply = "¿En qué ciudad y estado te encuentras?";
+      }
+
+      else if (sess.step === "UBICACION") {
+        sess.data.ubicacion = String(text || "").trim();
+        sess.step = "TELEFONO";
+        reply = "¿Cuál es tu número de teléfono para contactarte?";
+      }
+
+      else if (sess.step === "TELEFONO") {
+        sess.data.telefono = String(text || "").trim();
+        sess.step = "EMAIL";
+        reply = "Por último, ¿nos compartes tu correo electrónico?";
+      }
+
+      else if (sess.step === "EMAIL") {
+        sess.data.email = String(text || "").trim();
+
+        // final
+        completed = true;
+        sess.step = "COMPLETED";
+
+        const d = sess.data;
+        reply =
+`¡Gracias! Hemos registrado tus datos:
+Sucursal: ${d.sucursal || ""}
+- Producto: ${d.producto_interes || ""}
+- Intención: ${d.intencion_cliente || ""}
+- Nombre: ${d.nombre || ""}
+- Empresa: ${d.empresa || ""}
+- Ubicación: ${d.ubicacion || ""}
+- Teléfono: ${d.telefono || ""}
+- Email: ${d.email || ""}
+
+En breve un asesor se pondrá en contacto contigo.
+(Escribe 'menu' para reiniciar)`;
+      }
+
+      else {
+        // si por algo quedó raro, reinicia
+        sess = startSession(from);
+        reply = msgSucursal();
+      }
+
+      // ======= Responder WhatsApp (rápido) =======
+      await sendWhatsAppText(waUrl, waToken, from, reply);
+
+      // ======= Guardar en Lark SOLO al finalizar (SIN LIST/FILTER) =======
+      if (completed) {
+        try {
+          const d = sess.data;
+
+          await larkCreateLead({
+            wa_id: String(from),
+            created_at_ms: Date.now(),
+            sucursal: d.sucursal || "",
+            producto_interes: d.producto_interes || "",
+            intencion_cliente: d.intencion_cliente || "",
+            nombre: d.nombre || "",
+            empresa: d.empresa || "",
+            ubicacion: d.ubicacion || "",
+            telefono: d.telefono || "",
+            email: d.email || "",
+            mensaje: "", // opcional
+            stage: "COMPLETED",
+          });
+
+          console.log("LARK_SYNC_OK");
+        } catch (e) {
+          console.error("LARK_SYNC_ERROR:", e?.message || e);
+        } finally {
+          // limpia sesión para que no repita
+          SESS.delete(from);
+        }
+      }
 
       return send(200, "OK");
     } catch (err) {
@@ -99,259 +304,17 @@ module.exports = async function handler(req, res) {
 };
 
 // =========================
-// FLOW (Node) + Lark persistence (MISMA TABLA)
+// WhatsApp helper
 // =========================
-
-const STAGES = {
-  ASK_BRANCH: "ASK_BRANCH",
-  ASK_PRODUCT: "ASK_PRODUCT",
-  ASK_INTENT: "ASK_INTENT",
-  ASK_NAME: "ASK_NAME",
-  ASK_COMPANY: "ASK_COMPANY",
-  ASK_LOCATION: "ASK_LOCATION",
-  ASK_PHONE: "ASK_PHONE",
-  ASK_EMAIL: "ASK_EMAIL",
-  COMPLETED: "COMPLETED",
-};
-
-function stageFieldName() {
-  return (process.env.LARK_STAGE_FIELD || "stage").trim();
-}
-
-function normalizeText(s) {
-  return String(s || "")
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-}
-
-function isMenu(textNorm) {
-  return textNorm === "menu" || textNorm === "reiniciar" || textNorm === "reset";
-}
-
-function parseBranch(text) {
-  const t = normalizeText(text);
-  if (t === "1" || t.includes("cdmx") || t.includes("mexico") || t.includes("ciudad")) return "CDMX";
-  if (t === "2" || t.includes("mty") || t.includes("monterrey")) return "MTY";
-  return null;
-}
-
-function parseProduct(text) {
-  const t = normalizeText(text);
-  if (t === "1" || t.includes("limpi")) return "Limpiadoras láser";
-  if (t === "2" || t.includes("sold")) return "Soldadoras láser";
-  if (t === "3" || t.includes("marca")) return "Marcadoras láser";
-  if (t === "4" || t.includes("otro")) return "Otro";
-  return null;
-}
-
-function parseIntent(text) {
-  const t = normalizeText(text);
-  if (t === "1" || t.includes("cot")) return "Cotización";
-  if (t === "2" || t.includes("demo")) return "DEMO";
-  if (t === "3" || t.includes("info")) return "Más información";
-  return null;
-}
-
-function looksLikePhone(text) {
-  const digits = String(text || "").replace(/\D/g, "");
-  return digits.length >= 8;
-}
-function normalizePhone(text) {
-  return String(text || "").replace(/\D/g, "");
-}
-function looksLikeEmail(text) {
-  const t = String(text || "").trim();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t);
-}
-
-async function handleFlowAndPersist({ wa_id, userText }) {
-  const textNorm = normalizeText(userText);
-  const sf = stageFieldName();
-
-  // MENU / REINICIAR
-  if (isMenu(textNorm)) {
-    await larkCloseAnyOpenSession(wa_id).catch(() => {});
-    // creamos nueva sesión arrancando en sucursal
-    await larkCreateSession({ wa_id, stage: STAGES.ASK_BRANCH }).catch(() => {});
-    return [
-      "Listo. Reiniciamos tu solicitud.",
-      "",
-      "¿Con qué sucursal quieres continuar?",
-      "",
-      "1) CDMX",
-      "2) Monterrey",
-      "",
-      "Responde 1 o 2 (o escribe CDMX / MTY).",
-    ].join("\n");
-  }
-
-  // Buscar sesión abierta
-  let session = await larkFindOpenSession(wa_id);
-
-  // Si no hay sesión, crear y preguntar sucursal
-  if (!session) {
-    session = await larkCreateSession({ wa_id, stage: STAGES.ASK_BRANCH });
-  }
-
-  const { tableId, recordId, stage } = session;
-
-  const setStage = async (newStage) => {
-    await larkUpdateRecord(tableId, recordId, { [sf]: newStage });
-  };
-
-  const setFields = async (fields) => {
-    await larkUpdateRecord(tableId, recordId, fields);
-  };
-
-  // ===== STAGES =====
-  if (stage === STAGES.ASK_BRANCH) {
-    const branch = parseBranch(userText);
-    if (!branch) {
-      return [
-        "¿Con qué sucursal quieres continuar?",
-        "",
-        "1) CDMX",
-        "2) Monterrey",
-        "",
-        "Responde 1 o 2 (o escribe CDMX / MTY).",
-      ].join("\n");
-    }
-
-    // ✅ Guardamos sucursal como CAMPO (para que tus views filtren)
-    await setFields({ sucursal: branch, [sf]: STAGES.ASK_PRODUCT });
-
-    return [
-      `Perfecto ✅ Sucursal: ${branch}`,
-      "",
-      "Hola, gracias por contactar a FEIYANG MAQUINARIA.",
-      "Por favor selecciona una opción escribiendo el número:",
-      "1) Limpiadoras láser",
-      "2) Soldadoras láser",
-      "3) Marcadoras láser",
-      "4) Otro",
-    ].join("\n");
-  }
-
-  if (stage === STAGES.ASK_PRODUCT) {
-    const prod = parseProduct(userText);
-    if (!prod) {
-      return [
-        "Por favor selecciona una opción escribiendo el número:",
-        "1) Limpiadoras láser",
-        "2) Soldadoras láser",
-        "3) Marcadoras láser",
-        "4) Otro",
-      ].join("\n");
-    }
-    await setFields({ producto_interes: prod, [sf]: STAGES.ASK_INTENT });
-    return [
-      "Perfecto.",
-      "¿Qué te gustaría hacer?",
-      "1) Solicitar una cotización",
-      "2) Solicitar una DEMO",
-      "3) Recibir más información",
-    ].join("\n");
-  }
-
-  if (stage === STAGES.ASK_INTENT) {
-    const intent = parseIntent(userText);
-    if (!intent) {
-      return [
-        "¿Qué te gustaría hacer?",
-        "1) Solicitar una cotización",
-        "2) Solicitar una DEMO",
-        "3) Recibir más información",
-      ].join("\n");
-    }
-    await setFields({ intencion_cliente: intent, [sf]: STAGES.ASK_NAME });
-    return "Excelente elección.\nPara continuar, ¿podrías indicarnos tu nombre completo?";
-  }
-
-  if (stage === STAGES.ASK_NAME) {
-    const name = String(userText || "").trim();
-    if (name.length < 2) return "Para continuar, ¿podrías indicarnos tu nombre completo?";
-    await setFields({ nombre: name, [sf]: STAGES.ASK_COMPANY });
-    return "Gracias. ¿Cuál es el nombre de tu empresa o taller?";
-  }
-
-  if (stage === STAGES.ASK_COMPANY) {
-    const company = String(userText || "").trim();
-    if (company.length < 2) return "¿Cuál es el nombre de tu empresa o taller?";
-    await setFields({ empresa: company, [sf]: STAGES.ASK_LOCATION });
-    return "¿En qué ciudad y estado te encuentras?";
-  }
-
-  if (stage === STAGES.ASK_LOCATION) {
-    const loc = String(userText || "").trim();
-    if (loc.length < 2) return "¿En qué ciudad y estado te encuentras?";
-    await setFields({ ubicacion: loc, [sf]: STAGES.ASK_PHONE });
-    return "¿Cuál es tu número de teléfono para contactarte?";
-  }
-
-  if (stage === STAGES.ASK_PHONE) {
-    if (!looksLikePhone(userText)) return "¿Cuál es tu número de teléfono para contactarte?";
-    const phone = normalizePhone(userText);
-    await setFields({ telefono: phone, [sf]: STAGES.ASK_EMAIL });
-    return "Por último, ¿nos compartes tu correo electrónico?";
-  }
-
-  if (stage === STAGES.ASK_EMAIL) {
-    if (!looksLikeEmail(userText)) return "Por último, ¿nos compartes tu correo electrónico? (Ej: nombre@correo.com)";
-    const email = String(userText).trim();
-
-    await setFields({ email, [sf]: STAGES.COMPLETED });
-
-    const rec = await larkReadRecord(tableId, recordId).catch(() => null);
-    const f = rec?.fields || {};
-
-    return [
-      "¡Gracias! Hemos registrado tus datos:",
-      `Sucursal: ${f.sucursal || ""}`,
-      `- Nombre: ${f.nombre || ""}`,
-      `- Empresa: ${f.empresa || ""}`,
-      `- Ubicación: ${f.ubicacion || ""}`,
-      `- Teléfono: ${f.telefono || ""}`,
-      `- Email: ${f.email || ""}`,
-      "",
-      "En breve un asesor se pondrá en contacto contigo.",
-      "",
-      "(Escribe 'menu' para reiniciar)",
-    ].join("\n");
-  }
-
-  if (stage === STAGES.COMPLETED) {
-    return "Ya tengo tu solicitud registrada ✅\nEscribe 'menu' para reiniciar.";
-  }
-
-  // fallback
-  await setStage(STAGES.ASK_BRANCH).catch(() => {});
-  return [
-    "Listo. Reiniciamos tu solicitud.",
-    "",
-    "¿Con qué sucursal quieres continuar?",
-    "",
-    "1) CDMX",
-    "2) Monterrey",
-    "",
-    "Responde 1 o 2 (o escribe CDMX / MTY).",
-  ].join("\n");
-}
-
-// =========================
-// WhatsApp sender
-// =========================
-async function sendWhatsAppText({ waToken, phoneNumberId, to, body }) {
-  const waUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
+async function sendWhatsAppText(waUrl, waToken, to, bodyText) {
   const payload = {
     messaging_product: "whatsapp",
     to,
     type: "text",
-    text: { body: String(body || "") },
+    text: { body: String(bodyText || "") },
   };
 
-  const waResp = await fetch(waUrl, {
+  const resp = await fetch(waUrl, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${waToken}`,
@@ -360,16 +323,15 @@ async function sendWhatsAppText({ waToken, phoneNumberId, to, body }) {
     body: JSON.stringify(payload),
   });
 
-  const waRespData = await waResp.json().catch(() => ({}));
-  console.log("SEND_RESPONSE:", waResp.status, JSON.stringify(waRespData, null, 2));
-  if (!waResp.ok) {
-    throw new Error(`WhatsApp send failed status=${waResp.status} body=${JSON.stringify(waRespData)}`);
-  }
+  const data = await resp.json().catch(() => ({}));
+  console.log("SEND_RESPONSE:", resp.status, JSON.stringify(data, null, 2));
+  return { status: resp.status, data };
 }
 
 // =========================
-// LARK HELPERS
+// LARK HELPERS (solo CREATE, sin list/filter)
 // =========================
+
 async function larkGetTenantToken() {
   const now = Date.now();
   if (LARK_CACHE.token && LARK_CACHE.expiresAtMs > now + 60000) return LARK_CACHE.token;
@@ -396,32 +358,47 @@ async function larkGetTenantToken() {
   return LARK_CACHE.token;
 }
 
-function cleanAppToken(appTokenRaw) {
-  return String(appTokenRaw || "").split("?")[0].trim();
-}
-function getAppTokenOrThrow() {
+async function larkCreateLead({
+  wa_id,
+  created_at_ms,
+  sucursal,
+  producto_interes,
+  intencion_cliente,
+  nombre,
+  empresa,
+  ubicacion,
+  telefono,
+  email,
+  mensaje,
+  stage,
+}) {
   const appTokenRaw = process.env.LARK_APP_TOKEN;
-  if (!appTokenRaw) throw new Error("Missing LARK_APP_TOKEN");
-  return cleanAppToken(appTokenRaw);
-}
-function getTableIdOrThrow() {
   const tableId = process.env.LARK_TABLE_ID;
-  if (!tableId) throw new Error("Missing LARK_TABLE_ID");
-  return tableId;
-}
 
-async function larkCreateSession({ wa_id, stage }) {
-  const appToken = getAppTokenOrThrow();
-  const tableId = getTableIdOrThrow();
+  if (!appTokenRaw || !tableId) throw new Error("Missing LARK_APP_TOKEN or LARK_TABLE_ID");
+
+  const appToken = String(appTokenRaw).split("?")[0].trim();
   const tenantToken = await larkGetTenantToken();
-  const sf = stageFieldName();
 
   const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records`;
 
+  // OJO: usamos exactamente los nombres de columna que tú mostraste en Lark
   const fields = {
     wa_id: String(wa_id || ""),
-    created_at: Date.now(),
-    [sf]: String(stage || STAGES.ASK_BRANCH),
+    created_at: Number(created_at_ms || Date.now()),
+    sucursal: String(sucursal || ""),
+    producto_interes: String(producto_interes || ""),
+    intencion_cliente: String(intencion_cliente || ""),
+    nombre: String(nombre || ""),
+    empresa: String(empresa || ""),
+    ubicacion: String(ubicacion || ""),
+    telefono: String(telefono || ""),
+    email: String(email || ""),
+    mensaje: String(mensaje || ""),
+    stage: String(stage || "COMPLETED"),
+    lark_status: "OK",
+    lark_synced_at: Date.now(),
+    lark_error: "",
   };
 
   const resp = await fetch(url, {
@@ -434,94 +411,10 @@ async function larkCreateSession({ wa_id, stage }) {
   });
 
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok || data?.code !== 0 || !data?.data?.record?.record_id) {
+  if (!resp.ok || data?.code !== 0) {
     throw new Error(`Lark create record error: status=${resp.status} body=${JSON.stringify(data)}`);
   }
 
-  return {
-    tableId,
-    recordId: data.data.record.record_id,
-    stage: fields[sf],
-  };
-}
-
-async function larkUpdateRecord(tableId, recordId, fields) {
-  const appToken = getAppTokenOrThrow();
-  const tenantToken = await larkGetTenantToken();
-
-  const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records/${recordId}`;
-  const resp = await fetch(url, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${tenantToken}`,
-      "Content-Type": "application/json; charset=utf-8",
-    },
-    body: JSON.stringify({ fields }),
-  });
-
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok || data?.code !== 0) {
-    throw new Error(`Lark update record error: status=${resp.status} body=${JSON.stringify(data)}`);
-  }
+  console.log("LARK_SAVED:", JSON.stringify(data, null, 2));
   return data;
-}
-
-async function larkReadRecord(tableId, recordId) {
-  const appToken = getAppTokenOrThrow();
-  const tenantToken = await larkGetTenantToken();
-
-  const url = `https://open.larksuite.com/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records/${recordId}`;
-  const resp = await fetch(url, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${tenantToken}` },
-  });
-
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok || data?.code !== 0) {
-    throw new Error(`Lark read record error: status=${resp.status} body=${JSON.stringify(data)}`);
-  }
-  return data?.data?.record || null;
-}
-
-async function larkFindOpenSession(wa_id) {
-  const appToken = getAppTokenOrThrow();
-  const tableId = getTableIdOrThrow();
-  const tenantToken = await larkGetTenantToken();
-  const sf = stageFieldName();
-
-  const filter = `CurrentValue.[wa_id] = "${String(wa_id).replace(/"/g, '\\"')}" AND CurrentValue.[${sf}] != "${STAGES.COMPLETED}"`;
-
-  const url =
-    `https://open.larksuite.com/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records` +
-    `?page_size=20&filter=${encodeURIComponent(filter)}`;
-
-  const resp = await fetch(url, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${tenantToken}` },
-  });
-
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok || data?.code !== 0) {
-    throw new Error(`Lark list records error: status=${resp.status} body=${JSON.stringify(data)}`);
-  }
-
-  const items = data?.data?.items || [];
-  if (!items.length) return null;
-
-  items.sort((a, b) => Number(b?.fields?.created_at || 0) - Number(a?.fields?.created_at || 0));
-  const rec = items[0];
-  const stage = rec?.fields?.[sf] || STAGES.ASK_BRANCH;
-
-  return {
-    tableId,
-    recordId: rec.record_id,
-    stage: String(stage),
-  };
-}
-
-async function larkCloseAnyOpenSession(wa_id) {
-  const s = await larkFindOpenSession(wa_id);
-  if (!s) return;
-  const sf = stageFieldName();
-  await larkUpdateRecord(s.tableId, s.recordId, { [sf]: "CLOSED_BY_MENU" });
 }
