@@ -1272,11 +1272,10 @@ function coerceToLarkValue(fieldMeta, rawValue, fieldNameForLog) {
   }
 
   // SELECT (single/multi): property.options existe
-  if (Array.isArray(fieldMeta?.property?.options)) {
-    const optId = pickSelectOptionId(fieldMeta, rawValue);
-    if (optId) return optId;
-
-    // Si no encontramos option_id, log y no mandamos este campo para no romper el create
+  // SELECT (single/multi): property.options existe
+if (Array.isArray(fieldMeta?.property?.options)) {
+  const optId = pickSelectOptionId(fieldMeta, rawValue);
+  if (!optId) {
     console.log("LARK_SELECT_NO_MATCH:", {
       field: fieldNameForLog,
       value: String(rawValue || ""),
@@ -1284,6 +1283,21 @@ function coerceToLarkValue(fieldMeta, rawValue, fieldNameForLog) {
     });
     return undefined;
   }
+
+  // IMPORTANT: enviar formato estructurado para que Lark lo renderice bien
+  // Single Option -> { id: "opt..." }
+  // Multiple Option -> [{ id: "opt..." }, ...]
+  const ft = fieldMeta?.field_type ?? fieldMeta?.type;
+
+  // Nota: si tu tenant usa otros códigos, esto sigue siendo seguro:
+  // si resulta ser multi y mandamos objeto, fallará y lo veremos en logs.
+  // pero normalmente:
+  // - single select: objeto {id}
+  // - multi select: array de objetos [{id}]
+  const looksMulti = ft === 4 || ft === 23; // (depende del tenant; si no aplica lo ajustamos con logs)
+  if (looksMulti) return [{ id: optId }];
+  return { id: optId };
+}
 
   // FECHA / DATETIME: property.date_formatter suele existir
   if (fieldMeta?.property?.date_formatter || fieldMeta?.property?.formatter) {
