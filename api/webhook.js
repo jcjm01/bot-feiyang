@@ -7,7 +7,7 @@ let LARK_CACHE = { token: null, expiresAtMs: 0 };
 // - Convertir selects a option_id
 // - Formatear fechas según el tipo real del campo
 let LARK_FIELDS_CACHE = { byName: null, loadedAtMs: 0 };
-const LARK_FIELDS_TTL_MS = 60 * 60 * 1000; // 1 hora cache por instancia
+const LARK_FIELDS_TTL_MS = 15 * 60 * 1000; // 1 hora cache por instancia
 
 // dedupe simple en memoria (sirve por instancia)
 const SEEN = new Map(); // msgId -> expiresAt
