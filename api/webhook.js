@@ -382,9 +382,7 @@ function msgEmpresa() {
 function msgUbicacion() {
   return "¿En qué ciudad y estado te encuentras?";
 }
-function msgTelefono() {
-  return "¿Cuál es tu número de teléfono para contactarte?";
-}
+
 function msgEmail() {
   return "Por último, ¿nos compartes tu correo electrónico?";
 }
@@ -1023,14 +1021,10 @@ module.exports = async function handler(req, res) {
       }
       else if (sess.step === "UBICACION") {
         sess.data.ubicacion = String(text || "").trim();
-        sess.step = "TELEFONO";
+        sess.step = "EMAIL";
         reply = msgTelefono();
       }
-      else if (sess.step === "TELEFONO") {
-        sess.data.telefono = String(text || "").trim();
-        sess.step = "EMAIL";
-        reply = msgEmail();
-      }
+      
       else if (sess.step === "EMAIL") {
         sess.data.email = String(text || "").trim();
 
@@ -1052,7 +1046,6 @@ module.exports = async function handler(req, res) {
 - Nombre: ${d.nombre || ""}
 - Empresa: ${d.empresa || ""}
 - Ubicación: ${d.ubicacion || ""}
-- Teléfono: ${d.telefono || ""}
 - Email: ${d.email || ""}
 
 ${cierre}
@@ -1129,7 +1122,7 @@ ${cierre}
             nombre: d.nombre || "",
             empresa: d.empresa || "",
             ubicacion: d.ubicacion || "",
-            telefono: d.telefono || "",
+            telefono: "",
             email: d.email || "",
             mensaje: "", // opcional
             stage: "COMPLETED",
