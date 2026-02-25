@@ -1022,7 +1022,7 @@ module.exports = async function handler(req, res) {
       else if (sess.step === "UBICACION") {
         sess.data.ubicacion = String(text || "").trim();
         sess.step = "EMAIL";
-        reply = msgTelefono();
+        reply = msgEmail();
       }
       
       else if (sess.step === "EMAIL") {
