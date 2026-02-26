@@ -1284,19 +1284,8 @@ if (Array.isArray(fieldMeta?.property?.options)) {
     return undefined;
   }
 
-  // IMPORTANT: enviar formato estructurado para que Lark lo renderice bien
-  // Single Option -> { id: "opt..." }
-  // Multiple Option -> [{ id: "opt..." }, ...]
-  const ft = fieldMeta?.field_type ?? fieldMeta?.type;
-
-  // Nota: si tu tenant usa otros códigos, esto sigue siendo seguro:
-  // si resulta ser multi y mandamos objeto, fallará y lo veremos en logs.
-  // pero normalmente:
-  // - single select: objeto {id}
-  // - multi select: array de objetos [{id}]
-  const looksMulti = ft === 4 || ft === 23; // (depende del tenant; si no aplica lo ajustamos con logs)
-  if (looksMulti) return [{ id: optId }];
-  return { id: optId };
+  
+  return optId;
 }
 
   // FECHA / DATETIME: property.date_formatter suele existir
