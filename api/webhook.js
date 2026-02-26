@@ -1273,20 +1273,29 @@ function coerceToLarkValue(fieldMeta, rawValue, fieldNameForLog) {
 
   // SELECT (single/multi): property.options existe
   // SELECT (single/multi): property.options existe
+// SELECT (single): enviar el NOMBRE (label), no option_id
+// SELECT (single): enviar el NOMBRE (label), no option_id
 if (Array.isArray(fieldMeta?.property?.options)) {
-  const optId = pickSelectOptionId(fieldMeta, rawValue);
-  if (!optId) {
+  const label = String(rawValue ?? "").trim();
+  if (!label) return undefined;
+
+  const opts = fieldMeta.property.options || [];
+  const hit = opts.find(o => String(o?.name || "").trim().toLowerCase() === label.toLowerCase());
+
+  if (!hit) {
     console.log("LARK_SELECT_NO_MATCH:", {
       field: fieldNameForLog,
-      value: String(rawValue || ""),
-      options: (fieldMeta.property.options || []).map(o => o?.name).slice(0, 50),
+      value: label,
+      options: opts.map(o => o?.name).slice(0, 50),
     });
     return undefined;
   }
 
-  
-  return optId;
+  return hit.name; // manda el texto exacto (label)
 }
+
+  
+
 
   // FECHA / DATETIME: property.date_formatter suele existir
   if (fieldMeta?.property?.date_formatter || fieldMeta?.property?.formatter) {
