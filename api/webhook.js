@@ -625,19 +625,40 @@ if (sess.step === "PRODUCTO") {
 
       // ---------- LIMPIADORA ----------
       else if (sess.step === "LIMP_Q1") {
-        const map = {
-          "1": "Remoción de óxido en estructuras metálicas",
-          "2": "Limpieza de moldes o piezas industriales",
-          "3": "Mantenimiento eléctrico / torres / altura",
-          "4": "Remoción de pintura o recubrimientos",
-          "5": "Estoy evaluando tecnología para mi empresa",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgLimpQ1();
-        else {
-          sess.data.limp_que_limpia = val;
-          sess.step = "LIMP_Q2";
-          reply = msgLimpQ2();
+        const choice = parseMenuChoice(text, 1, 5);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "LIMP_Q1");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender la opción de limpieza. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 5. (Intento ${attempt}/3)\n\n` +
+              msgLimpQ1();
+          }
+        } else {
+          resetTry(sess, "LIMP_Q1");
+      
+          const map = {
+            1: "Remoción de óxido en estructuras metálicas",
+            2: "Limpieza de moldes o piezas industriales",
+            3: "Mantenimiento eléctrico / torres / altura",
+            4: "Remoción de pintura o recubrimientos",
+            5: "Estoy evaluando tecnología para mi empresa",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            // fallback ultra seguro
+            reply = msgLimpQ1();
+          } else {
+            sess.data.limp_que_limpia = val;
+            sess.step = "LIMP_Q2";
+            reply = msgLimpQ2();
+          }
         }
       }
       else if (sess.step === "LIMP_Q2") {
@@ -1047,47 +1068,124 @@ if (sess.step === "PRODUCTO") {
 
       // ---------- Contacto ----------
       else if (sess.step === "NOMBRE") {
-        sess.data.nombre = String(text || "").trim();
-        sess.step = "EMPRESA";
-        reply = msgEmpresa();
+        const nombre = String(text || "").trim();
+      
+        // válido si: >=3 chars y contiene letras
+        const okLen = nombre.length >= 3;
+        const hasLetter = /[a-zA-ZáéíóúÁÉÍÓÚñÑ]/.test(nombre);
+      
+        if (!okLen || !hasLetter) {
+          const attempt = incTry(sess, "NOMBRE");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré registrar tu nombre correctamente. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Escribe tu nombre completo (solo texto). Ej: Juan Pérez. (Intento ${attempt}/3)`;
+          }
+        } else {
+          resetTry(sess, "NOMBRE");
+          sess.data.nombre = nombre;
+          sess.step = "EMPRESA";
+          reply = msgEmpresa();
+        }
       }
       else if (sess.step === "EMPRESA") {
-        sess.data.empresa = String(text || "").trim();
-        sess.step = "UBICACION";
-        reply = msgUbicacion();
+        const empresa = String(text || "").trim();
+      
+        const okLen = empresa.length >= 2;
+        const hasLetter = /[a-zA-ZáéíóúÁÉÍÓÚñÑ]/.test(empresa);
+      
+        if (!okLen || !hasLetter) {
+          const attempt = incTry(sess, "EMPRESA");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré registrar el nombre de tu empresa/taller. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Escribe el nombre de tu empresa o taller (solo texto). Ej: Taller Pérez. (Intento ${attempt}/3)`;
+          }
+        } else {
+          resetTry(sess, "EMPRESA");
+          sess.data.empresa = empresa;
+          sess.step = "UBICACION";
+          reply = msgUbicacion();
+        }
       }
       else if (sess.step === "UBICACION") {
-        sess.data.ubicacion = String(text || "").trim();
-        sess.step = "EMAIL";
-        reply = msgEmail();
+        const ubic = String(text || "").trim();
+      
+        const okLen = ubic.length >= 3;
+        const hasLetter = /[A-Za-zÑñ]/.test(ubic) || /[ÁÉÍÓÚáéíóú]/.test(ubic);
+      
+        if (!okLen || !hasLetter) {
+          const attempt = incTry(sess, "UBICACION");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré registrar tu ubicación correctamente. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Indica tu ciudad y estado. Ej: CDMX / Monterrey, NL. (Intento ${attempt}/3)`;
+          }
+        } else {
+          resetTry(sess, "UBICACION");
+          sess.data.ubicacion = ubic;
+          sess.step = "EMAIL";
+          reply = msgEmail();
+        }
       }
       
       else if (sess.step === "EMAIL") {
-        sess.data.email = String(text || "").trim();
-
-        // final
-        completed = true;
-        sess.step = "COMPLETED";
-
-        const d = sess.data;
-        d.dentro_horario = isDentroHorarioCDMX();
-        d.qa_resumen = buildResumen(d);
-
-        const cierre = d.dentro_horario
-          ? "✅ Un asesor especializado se pondrá en contacto contigo a la brevedad posible.\n¡Gracias por escribirnos!"
-          : "🕘 Hemos recibido tu información correctamente.\nNuestro equipo te contactará en el próximo horario laboral (lunes a viernes de 9:00 a 18:00).\n¡Gracias por tu interés!";
-
-        reply =
-`¡Gracias! Hemos registrado tus datos:
-- Producto: ${d.producto_interes_v2 || d.producto_interes || ""}
-- Nombre: ${d.nombre || ""}
-- Empresa: ${d.empresa || ""}
-- Ubicación: ${d.ubicacion || ""}
-- Email: ${d.email || ""}
-
-${cierre}
-
-(Escribe 'menu' para reiniciar)`;
+        const email = String(text || "").trim();
+      
+        // válido si tiene algo@algo.algo (simple y efectivo)
+        const ok =
+          email.length >= 6 &&
+          /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+      
+        if (!ok) {
+          const attempt = incTry(sess, "EMAIL");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré registrar tu correo correctamente. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Escribe un correo válido. Ej: nombre@dominio.com (Intento ${attempt}/3)`;
+          }
+        } else {
+          resetTry(sess, "EMAIL");
+          sess.data.email = email;
+      
+          // ---- aquí dejas EXACTAMENTE tu lógica final actual ----
+          completed = true;
+          sess.step = "COMPLETED";
+      
+          const d = sess.data;
+          d.dentro_horario = isDentroHorarioCDMX();
+          d.qa_resumen = buildResumen(d);
+      
+          const cierre = d.dentro_horario
+            ? "✅ Un asesor especializado se pondrá en contacto contigo a la brevedad posible.\n¡Gracias por escribirnos!"
+            : "✅ Hemos recibido tu información.\nNuestro equipo te contactará en el próximo horario laboral (lun-vie 9:00 a 18:00).\n¡Gracias por tu interés!";
+      
+          reply =
+            "¡Gracias! Hemos registrado tus datos:\n\n" +
+            `• Producto: ${d.producto_interes_v2 || d.producto_interes || ""}\n` +
+            `• Nombre: ${d.nombre || ""}\n` +
+            `• Empresa: ${d.empresa || ""}\n` +
+            `• Ubicación: ${d.ubicacion || ""}\n` +
+            `• Email: ${d.email || ""}\n\n` +
+            cierre +
+            "\n\n(Escribe 'menu' para reiniciar)";
+        }
       }
       else {
         // si por algo quedó raro, reinicia
