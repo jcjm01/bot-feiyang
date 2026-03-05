@@ -662,20 +662,40 @@ if (sess.step === "PRODUCTO") {
         }
       }
       else if (sess.step === "LIMP_Q2") {
-        const map = {
-          "1": "Sandblast",
-          "2": "Químicos",
-          "3": "Lijado manual",
-          "4": "Tercerizan servicio",
-          "5": "Limpieza con hielo seco",
-          "6": "No lo hemos resuelto aún",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgLimpQ2();
-        else {
-          sess.data.limp_proceso_actual = val;
-          sess.step = "LIMP_Q3";
-          reply = msgLimpQ3();
+        const choice = parseMenuChoice(text, 1, 6);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "LIMP_Q2");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender la opción del proceso actual. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 6. (Intento ${attempt}/3)\n\n` +
+              msgLimpQ2();
+          }
+        } else {
+          resetTry(sess, "LIMP_Q2");
+      
+          const map = {
+            1: "Sandblast",
+            2: "Químicos",
+            3: "Lijado manual",
+            4: "Tercerizan servicio",
+            5: "Limpieza con hielo seco",
+            6: "No lo hemos resuelto aún",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgLimpQ2();
+          } else {
+            sess.data.limp_proceso_actual = val;
+            sess.step = "LIMP_Q3";
+            reply = msgLimpQ3();
+          }
         }
       }
       else if (sess.step === "LIMP_Q3") {
