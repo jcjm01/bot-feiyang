@@ -21,6 +21,24 @@ function norm(s) {
   return String(s || "").trim().toLowerCase();
 }
 
+function parseMenuChoice(text, min, max) {
+  const t = String(text || "").trim();
+  if (!/^\d+$/.test(t)) return null;
+  const n = Number(t);
+  if (n < min || n > max) return null;
+  return n;
+}
+
+function incTry(sess, key) {
+  sess.tries = sess.tries || {};
+  sess.tries[key] = (sess.tries[key] || 0) + 1;
+  return sess.tries[key];
+}
+
+function resetTry(sess, key) {
+  if (sess?.tries) delete sess.tries[key];
+}
+
 function cleanupMaps() {
   const now = Date.now();
   for (const [k, exp] of SEEN) if (exp <= now) SEEN.delete(k);
@@ -29,7 +47,7 @@ function cleanupMaps() {
 
 function startSession(wa) {
   // Ya NO usamos sucursal: arrancamos directo en PRODUCTO
-  const sess = { step: "PRODUCTO", data: {}, updatedAt: Date.now() };
+  const sess = { step: "PRODUCTO", data: {}, tries: {}, updatedAt: Date.now() };
   SESS.set(wa, sess);
   return sess;
 }
@@ -548,43 +566,62 @@ module.exports = async function handler(req, res) {
       let reply = "";
       let completed = false;
 
-      // ======= Máquina de estados =======
-      if (sess.step === "PRODUCTO") {
-        let prod = "";
-        if (t === "1") prod = "Limpiadora láser";
-        else if (t === "2") prod = "Soldadora láser";
-        else if (t === "3") prod = "Marcadora láser";
-        else if (t === "4") prod = "Cortadora láser";
-        else if (t === "5") prod = "Refacción / soporte técnico";
+      
+      // ===== PRODUCTO (menú principal) =====
+if (sess.step === "PRODUCTO") {
+  const choice = parseMenuChoice(text, 1, 5);
 
-        if (!prod) {
-          reply = msgProducto();
-        } else {
-          // compatibilidad (viejo) + nuevo
-          sess.data.producto_interes = prod;
-          sess.data.producto_interes_v2 = prod;
+  // inválido => contar intento
+  if (!choice) {
+    const attempt = incTry(sess, "PRODUCTO");
 
-          if (prod === "Limpiadora láser") {
-            sess.step = "LIMP_Q1";
-            reply = msgLimpQ1();
-          } else if (prod === "Marcadora láser") {
-            sess.step = "MARC_Q1";
-            reply = msgMarcQ1();
-          } else if (prod === "Cortadora láser") {
-            sess.step = "CORT_Q1";
-            reply = msgCortQ1();
-          } else if (prod === "Soldadora láser") {
-            sess.step = "SOLD_TIPO";
-            reply = msgSoldTipo();
-          } else if (prod === "Refacción / soporte técnico") {
-            sess.step = "SOP_Q1";
-            reply = msgSopQ1();
-          } else {
-            // fallback
-            reply = msgProducto();
-          }
-        }
-      }
+    if (attempt >= 3) {
+      // 3er fallo => reiniciar automático
+      sess = startSession(from);
+      reply =
+        "No logré entender la opción. Reiniciamos ✅\n\n" +
+        msgProducto();
+    } else {
+      reply =
+        `Responde solo con un número del 1 al 5. (Intento ${attempt}/3)\n\n` +
+        msgProducto();
+    }
+  } else {
+    // válido => reset intentos de este step
+    resetTry(sess, "PRODUCTO");
+
+    let prod = "";
+    if (choice === 1) prod = "Limpiadora láser";
+    else if (choice === 2) prod = "Soldadora láser";
+    else if (choice === 3) prod = "Marcadora láser";
+    else if (choice === 4) prod = "Cortadora láser";
+    else if (choice === 5) prod = "Refacción / soporte técnico";
+
+    // compatibilidad (viejo) + nuevo
+    sess.data.producto_interes = prod;
+    sess.data.producto_interes_v2 = prod;
+
+    if (prod === "Limpiadora láser") {
+      sess.step = "LIMP_Q1";
+      reply = msgLimpQ1();
+    } else if (prod === "Marcadora láser") {
+      sess.step = "MARC_Q1";
+      reply = msgMarcQ1();
+    } else if (prod === "Cortadora láser") {
+      sess.step = "CORT_Q1";
+      reply = msgCortQ1();
+    } else if (prod === "Soldadora láser") {
+      sess.step = "SOLD_TIPO";
+      reply = msgSoldTipo();
+    } else if (prod === "Refacción / soporte técnico") {
+      sess.step = "SOP_Q1";
+      reply = msgSopQ1();
+    } else {
+      // fallback
+      reply = msgProducto();
+    }
+  }
+}
 
       // ---------- LIMPIADORA ----------
       else if (sess.step === "LIMP_Q1") {
@@ -1271,10 +1308,7 @@ function coerceToLarkValue(fieldMeta, rawValue, fieldNameForLog) {
     return !!rawValue;
   }
 
-  // SELECT (single/multi): property.options existe
-  // SELECT (single/multi): property.options existe
-// SELECT (single): enviar el NOMBRE (label), no option_id
-// SELECT (single): enviar el NOMBRE (label), no option_id
+  
 if (Array.isArray(fieldMeta?.property?.options)) {
   const label = String(rawValue ?? "").trim();
   if (!label) return undefined;
