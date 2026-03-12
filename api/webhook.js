@@ -699,393 +699,930 @@ if (sess.step === "PRODUCTO") {
         }
       }
       else if (sess.step === "LIMP_Q3") {
-        const map = {
-          "1": "Uso continuo industrial (turnos / producción diaria)",
-          "2": "50–200 piezas por mes",
-          "3": "Uso ocasional",
-          "4": "Proyecto aún en análisis",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgLimpQ3();
-        else {
-          sess.data.limp_volumen = val;
-          sess.step = "LIMP_Q4";
-          reply = msgLimpQ4();
+        const choice = parseMenuChoice(text, 1, 4);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "LIMP_Q3");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender la opción del volumen de trabajo. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 4. (Intento ${attempt}/3)\n\n` +
+              msgLimpQ3();
+          }
+        } else {
+          resetTry(sess, "LIMP_Q3");
+      
+          const map = {
+            1: "Uso continuo industrial (turnos / producción diaria)",
+            2: "50–200 piezas por mes",
+            3: "Uso ocasional",
+            4: "Proyecto aún en análisis",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            // ultra seguro
+            reply = msgLimpQ3();
+          } else {
+            sess.data.limp_volumen = val;
+            sess.step = "LIMP_Q4";
+            reply = msgLimpQ4();
+          }
         }
       }
       else if (sess.step === "LIMP_Q4") {
-        const map = {
-          "1": "Prioridad inmediata",
-          "2": "En evaluación técnica",
-          "3": "Planeación este año",
-          "4": "Exploración sin fecha definida",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgLimpQ4();
-        else {
-          sess.data.limp_etapa = val;
-          sess.step = "NOMBRE";
-          reply = msgNombre();
+        const choice = parseMenuChoice(text, 1, 4);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "LIMP_Q4");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender la etapa del proyecto. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 4. (Intento ${attempt}/3)\n\n` +
+              msgLimpQ4();
+          }
+        } else {
+          resetTry(sess, "LIMP_Q4");
+      
+          const map = {
+            1: "Prioridad inmediata",
+            2: "En evaluación técnica",
+            3: "Planeación este año",
+            4: "Exploración sin fecha definida",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgLimpQ4();
+          } else {
+            sess.data.limp_etapa = val;
+            sess.step = "NOMBRE";
+            reply = msgNombre();
+          }
         }
       }
 
       // ---------- MARCADORA ----------
       else if (sess.step === "MARC_Q1") {
-        const map = {
-          "1": "Acero / inoxidable",
-          "2": "Aluminio",
-          "3": "Plásticos",
-          "4": "Acrílico / madera",
-          "5": "Aún no lo defino",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgMarcQ1();
-        else {
-          sess.data.marc_material = val;
-          sess.step = "MARC_Q2";
-          reply = msgMarcQ2();
+        const choice = parseMenuChoice(text, 1, 5);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "MARC_Q1");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender el material a marcar. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 5. (Intento ${attempt}/3)\n\n` +
+              msgMarcQ1();
+          }
+        } else {
+          resetTry(sess, "MARC_Q1");
+      
+          const map = {
+            1: "Acero / inoxidable",
+            2: "Aluminio",
+            3: "Plásticos",
+            4: "Acrílico / madera",
+            5: "Aún no lo defino",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgMarcQ1();
+          } else {
+            sess.data.marc_material = val;
+            sess.step = "MARC_Q2";
+            reply = msgMarcQ2();
+          }
         }
       }
       else if (sess.step === "MARC_Q2") {
-        const map = {
-          "1": "Producción continua / en línea",
-          "2": "100–500 piezas por mes",
-          "3": "Bajo pedido",
-          "4": "Proyecto en evaluación",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgMarcQ2();
-        else {
-          sess.data.marc_volumen = val;
-          sess.step = "MARC_Q3";
-          reply = msgMarcQ3();
+        const choice = parseMenuChoice(text, 1, 4);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "MARC_Q2");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender el volumen de producción. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 4. (Intento ${attempt}/3)\n\n` +
+              msgMarcQ2();
+          }
+        } else {
+          resetTry(sess, "MARC_Q2");
+      
+          const map = {
+            1: "Producción continua / en línea",
+            2: "100–500 piezas por mes",
+            3: "Bajo pedido",
+            4: "Proyecto en evaluación",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgMarcQ2();
+          } else {
+            sess.data.marc_volumen = val;
+            sess.step = "MARC_Q3";
+            reply = msgMarcQ3();
+          }
         }
       }
       else if (sess.step === "MARC_Q3") {
-        const map = {
-          "1": "Grabado mecánico",
-          "2": "Etiquetas",
-          "3": "Tinta / tampografía",
-          "4": "Tercerizamos",
-          "5": "No realizamos marcado aún",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgMarcQ3();
-        else {
-          sess.data.marc_proceso_actual = val;
-          sess.step = "MARC_Q4";
-          reply = msgMarcQ4();
+        const choice = parseMenuChoice(text, 1, 5);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "MARC_Q3");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender el proceso actual de marcado. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 5. (Intento ${attempt}/3)\n\n` +
+              msgMarcQ3();
+          }
+        } else {
+          resetTry(sess, "MARC_Q3");
+      
+          const map = {
+            1: "Grabado mecánico",
+            2: "Etiquetas",
+            3: "Tinta / tampografía",
+            4: "Tercerizamos",
+            5: "No realizamos marcado aún",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgMarcQ3();
+          } else {
+            sess.data.marc_proceso_actual = val;
+            sess.step = "MARC_Q4";
+            reply = msgMarcQ4();
+          }
         }
       }
       else if (sess.step === "MARC_Q4") {
-        const map = {
-          "1": "Necesidad inmediata",
-          "2": "Comparando proveedores",
-          "3": "Planeación este año",
-          "4": "Explorando opciones",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgMarcQ4();
-        else {
-          sess.data.marc_etapa = val;
-          sess.step = "NOMBRE";
-          reply = msgNombre();
+        const choice = parseMenuChoice(text, 1, 4);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "MARC_Q4");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender la etapa del proyecto. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 4. (Intento ${attempt}/3)\n\n` +
+              msgMarcQ4();
+          }
+        } else {
+          resetTry(sess, "MARC_Q4");
+      
+          const map = {
+            1: "Necesidad inmediata",
+            2: "Comparando proveedores",
+            3: "Planeación este año",
+            4: "Explorando opciones",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgMarcQ4();
+          } else {
+            sess.data.marc_etapa = val;
+            sess.step = "NOMBRE";
+            reply = msgNombre();
+          }
         }
       }
 
       // ---------- CORTADORA ----------
       else if (sess.step === "CORT_Q1") {
-        const map = {
-          "1": "Acero al carbón",
-          "2": "Acero inoxidable",
-          "3": "Aluminio",
-          "4": "Lámina galvanizada",
-          "5": "Acrílico / MDF",
-          "6": "Por definir",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgCortQ1();
-        else {
-          sess.data.cort_material = val;
-          sess.step = "CORT_Q2";
-          reply = msgCortQ2();
+        const choice = parseMenuChoice(text, 1, 6);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "CORT_Q1");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender el material a cortar. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 6. (Intento ${attempt}/3)\n\n` +
+              msgCortQ1();
+          }
+        } else {
+          resetTry(sess, "CORT_Q1");
+      
+          const map = {
+            1: "Acero al carbón",
+            2: "Acero inoxidable",
+            3: "Aluminio",
+            4: "Lámina galvanizada",
+            5: "Acrílico / MDF",
+            6: "Por definir",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgCortQ1();
+          } else {
+            sess.data.cort_material = val;
+            sess.step = "CORT_Q2";
+            reply = msgCortQ2();
+          }
         }
       }
       else if (sess.step === "CORT_Q2") {
-        const map = {
-          "1": "Hasta 3 mm",
-          "2": "3–6 mm",
-          "3": "6–12 mm",
-          "4": "Más de 12 mm",
-          "5": "Aún no lo tengo definido",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgCortQ2();
-        else {
-          sess.data.cort_espesor = val;
-          sess.step = "CORT_Q3";
-          reply = msgCortQ3();
+        const choice = parseMenuChoice(text, 1, 5);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "CORT_Q2");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender el espesor a cortar. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 5. (Intento ${attempt}/3)\n\n` +
+              msgCortQ2();
+          }
+        } else {
+          resetTry(sess, "CORT_Q2");
+      
+          const map = {
+            1: "Hasta 3 mm",
+            2: "3–6 mm",
+            3: "6–12 mm",
+            4: "Más de 12 mm",
+            5: "Aún no lo tengo definido",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgCortQ2();
+          } else {
+            sess.data.cort_espesor = val;
+            sess.step = "CORT_Q3";
+            reply = msgCortQ3();
+          }
         }
       }
       else if (sess.step === "CORT_Q3") {
-        const map = {
-          "1": "Producción continua / turnos diarios",
-          "2": "100–500 piezas por mes",
-          "3": "Producción bajo pedido",
-          "4": "Proyecto en evaluación",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgCortQ3();
-        else {
-          sess.data.cort_volumen = val;
-          sess.step = "CORT_Q4";
-          reply = msgCortQ4();
+        const choice = parseMenuChoice(text, 1, 4);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "CORT_Q3");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender el volumen de producción. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 4. (Intento ${attempt}/3)\n\n` +
+              msgCortQ3();
+          }
+        } else {
+          resetTry(sess, "CORT_Q3");
+      
+          const map = {
+            1: "Producción continua / turnos diarios",
+            2: "100–500 piezas por mes",
+            3: "Producción bajo pedido",
+            4: "Proyecto en evaluación",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgCortQ3();
+          } else {
+            sess.data.cort_volumen = val;
+            sess.step = "CORT_Q4";
+            reply = msgCortQ4();
+          }
         }
       }
       else if (sess.step === "CORT_Q4") {
-        const map = {
-          "1": "Plasma",
-          "2": "Oxicorte",
-          "3": "Sierra / guillotina",
-          "4": "Tercerizan el servicio",
-          "5": "No lo realizamos aún",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgCortQ4();
-        else {
-          sess.data.cort_proceso_actual = val;
-          sess.step = "CORT_Q5";
-          reply = msgCortQ5();
+        const choice = parseMenuChoice(text, 1, 5);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "CORT_Q4");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender el proceso actual de corte. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 5. (Intento ${attempt}/3)\n\n` +
+              msgCortQ4();
+          }
+        } else {
+          resetTry(sess, "CORT_Q4");
+      
+          const map = {
+            1: "Plasma",
+            2: "Oxicorte",
+            3: "Sierra / guillotina",
+            4: "Tercerizan el servicio",
+            5: "No lo realizamos aún",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgCortQ4();
+          } else {
+            sess.data.cort_proceso_actual = val;
+            sess.step = "CORT_Q5";
+            reply = msgCortQ5();
+          }
         }
       }
       else if (sess.step === "CORT_Q5") {
-        const map = {
-          "1": "Necesidad inmediata",
-          "2": "Comparando proveedores",
-          "3": "Planeación este año",
-          "4": "Explorando opciones",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgCortQ5();
-        else {
-          sess.data.cort_etapa = val;
-          sess.step = "NOMBRE";
-          reply = msgNombre();
+        const choice = parseMenuChoice(text, 1, 4);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "CORT_Q5");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender la etapa del proyecto. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 4. (Intento ${attempt}/3)\n\n` +
+              msgCortQ5();
+          }
+        } else {
+          resetTry(sess, "CORT_Q5");
+      
+          const map = {
+            1: "Necesidad inmediata",
+            2: "Comparando proveedores",
+            3: "Planeación este año",
+            4: "Explorando opciones",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgCortQ5();
+          } else {
+            sess.data.cort_etapa = val;
+            sess.step = "NOMBRE";
+            reply = msgNombre();
+          }
         }
       }
 
       // ---------- SOLDADORA ----------
       else if (sess.step === "SOLD_TIPO") {
-        const map = { "1": "Reparación de moldes", "2": "Soldadura de producción" };
-        const val = pickOption(text, map);
-        if (!val) reply = msgSoldTipo();
-        else {
-          sess.data.sold_tipo = val;
-          if (val === "Reparación de moldes") {
-            sess.step = "SOLD_MOLDES_Q1";
-            reply = msgSoldMoldesQ1();
+        const choice = parseMenuChoice(text, 1, 2);
+      
+        // inválido => contar intento
+        if (!choice) {
+          const attempt = incTry(sess, "SOLD_TIPO");
+      
+          if (attempt >= 3) {
+            // 3er fallo => reiniciar automático
+            sess = startSession(from);
+            reply =
+              "No logré entender la opción de Soldadora. Reiniciamos ✅\n\n" +
+              msgProducto();
           } else {
-            sess.step = "SOLD_PROD_Q1";
-            reply = msgSoldProdQ1();
+            reply =
+              `Responde solo con un número del 1 al 2. (Intento ${attempt}/3)\n\n` +
+              msgSoldTipo();
+          }
+        } else {
+          // válido => reset intentos de este step
+          resetTry(sess, "SOLD_TIPO");
+      
+          const map = {
+            1: "Reparación de moldes",
+            2: "Soldadura de producción",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            // fallback ultra seguro
+            reply = msgSoldTipo();
+          } else {
+            sess.data.sold_tipo = val;
+      
+            if (val === "Reparación de moldes") {
+              sess.step = "SOLD_MOLDES_Q1";
+              reply = msgSoldMoldesQ1();
+            } else {
+              sess.step = "SOLD_PROD_Q1";
+              reply = msgSoldProdQ1();
+            }
           }
         }
       }
 
       // Moldes
       else if (sess.step === "SOLD_MOLDES_Q1") {
-        const map = { "1": "1 a 10", "2": "10 a 20", "3": "20 a 30", "4": "Arriba de 30" };
-        const val = pickOption(text, map);
-        if (!val) reply = msgSoldMoldesQ1();
-        else {
-          sess.data.sold_moldes_mes = val;
-          sess.step = "SOLD_MOLDES_Q2";
-          reply = msgSoldMoldesQ2();
+        const choice = parseMenuChoice(text, 1, 4);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "SOLD_MOLDES_Q1");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender la cantidad de moldes por mes. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 4. (Intento ${attempt}/3)\n\n` +
+              msgSoldMoldesQ1();
+          }
+        } else {
+          resetTry(sess, "SOLD_MOLDES_Q1");
+      
+          const map = {
+            1: "1 a 10",
+            2: "10 a 20",
+            3: "20 a 30",
+            4: "Arriba de 30",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgSoldMoldesQ1();
+          } else {
+            sess.data.sold_moldes_mes = val;
+            sess.step = "SOLD_MOLDES_Q2";
+            reply = msgSoldMoldesQ2();
+          }
         }
       }
       else if (sess.step === "SOLD_MOLDES_Q2") {
-        const map = {
-          "1": "Sí, equipo interno",
-          "2": "Parcial, pero tercerizamos",
-          "3": "No, todo se envía a externo",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgSoldMoldesQ2();
-        else {
-          sess.data.sold_mant_interno = val;
-          sess.step = "SOLD_MOLDES_Q3";
-          reply = msgSoldMoldesQ3();
+        const choice = parseMenuChoice(text, 1, 3);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "SOLD_MOLDES_Q2");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender la opción de mantenimiento interno. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 3. (Intento ${attempt}/3)\n\n` +
+              msgSoldMoldesQ2();
+          }
+        } else {
+          resetTry(sess, "SOLD_MOLDES_Q2");
+      
+          const map = {
+            1: "Sí, equipo interno",
+            2: "Parcial, pero tercerizamos",
+            3: "No, todo se envía a externo",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgSoldMoldesQ2();
+          } else {
+            sess.data.sold_mant_interno = val;
+            sess.step = "SOLD_MOLDES_Q3";
+            reply = msgSoldMoldesQ3();
+          }
         }
       }
       else if (sess.step === "SOLD_MOLDES_Q3") {
-        const map = {
-          "1": "Prioridad inmediata",
-          "2": "En evaluación técnica",
-          "3": "Planeación este año",
-          "4": "Exploración sin fecha definida",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgSoldMoldesQ3();
-        else {
-          sess.data.sold_etapa = val;
-          sess.step = "NOMBRE";
-          reply = msgNombre();
+        const choice = parseMenuChoice(text, 1, 4);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "SOLD_MOLDES_Q3");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender la etapa del proyecto. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 4. (Intento ${attempt}/3)\n\n` +
+              msgSoldMoldesQ3();
+          }
+        } else {
+          resetTry(sess, "SOLD_MOLDES_Q3");
+      
+          const map = {
+            1: "Prioridad inmediata",
+            2: "En evaluación técnica",
+            3: "Planeación este año",
+            4: "Exploración sin fecha definida",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgSoldMoldesQ3();
+          } else {
+            sess.data.sold_etapa = val;
+            sess.step = "NOMBRE";
+            reply = msgNombre();
+          }
         }
       }
 
       // Producción
       else if (sess.step === "SOLD_PROD_Q1") {
-        const map = {
-          "1": "Lámina metálica",
-          "2": "Tubo / Perfil",
-          "3": "Piezas automotrices",
-          "4": "Otro",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgSoldProdQ1();
-        else {
-          sess.data.sold_prod_producto = val;
-          if (val === "Otro") {
-            sess.step = "SOLD_PROD_Q1_OTRO";
-            reply = msgSoldProdQ1Otro();
+        const choice = parseMenuChoice(text, 1, 4);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "SOLD_PROD_Q1");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender el tipo de producto a soldar. Reiniciamos ✅\n\n" +
+              msgProducto();
           } else {
-            sess.step = "SOLD_PROD_Q2";
-            reply = msgSoldProdQ2();
+            reply =
+              `Responde solo con un número del 1 al 4. (Intento ${attempt}/3)\n\n` +
+              msgSoldProdQ1();
+          }
+        } else {
+          resetTry(sess, "SOLD_PROD_Q1");
+      
+          const map = {
+            1: "Lámina metálica",
+            2: "Tubo / Perfil",
+            3: "Piezas automotrices",
+            4: "Otro",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgSoldProdQ1();
+          } else {
+            sess.data.sold_prod_producto = val;
+      
+            if (val === "Otro") {
+              sess.step = "SOLD_PROD_Q1_OTRO";
+              reply = msgSoldProdQ1Otro();
+            } else {
+              sess.step = "SOLD_PROD_Q2";
+              reply = msgSoldProdQ2();
+            }
           }
         }
       }
       else if (sess.step === "SOLD_PROD_Q1_OTRO") {
-        sess.data.sold_prod_producto_otro = String(text || "").trim();
-        sess.step = "SOLD_PROD_Q2";
-        reply = msgSoldProdQ2();
+        const txt = String(text || "").trim();
+      
+        const okLen = txt.length >= 3;
+        const hasLetter = /[A-Za-zÑñ]/.test(txt) || /[ÁÉÍÓÚáéíóú]/.test(txt);
+      
+        if (!okLen || !hasLetter) {
+          const attempt = incTry(sess, "SOLD_PROD_Q1_OTRO");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré registrar el producto a soldar. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Especifica el producto a soldar (texto). Ej: Estructuras metálicas. (Intento ${attempt}/3)`;
+          }
+        } else {
+          resetTry(sess, "SOLD_PROD_Q1_OTRO");
+          sess.data.sold_prod_producto_otro = txt;
+          sess.step = "SOLD_PROD_Q2";
+          reply = msgSoldProdQ2();
+        }
       }
       else if (sess.step === "SOLD_PROD_Q2") {
-        const map = {
-          "1": "Acero al carbón",
-          "2": "Acero inoxidable",
-          "3": "Aluminio",
-          "4": "Galvanizado",
-          "5": "Otro",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgSoldProdQ2();
-        else {
-          sess.data.sold_prod_material = val;
-          if (val === "Otro") {
-            sess.step = "SOLD_PROD_Q2_OTRO";
-            reply = msgSoldProdQ2Otro();
+        const choice = parseMenuChoice(text, 1, 5);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "SOLD_PROD_Q2");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender el material a soldar. Reiniciamos ✅\n\n" +
+              msgProducto();
           } else {
-            sess.step = "SOLD_PROD_Q3";
-            reply = msgSoldProdQ3();
+            reply =
+              `Responde solo con un número del 1 al 5. (Intento ${attempt}/3)\n\n` +
+              msgSoldProdQ2();
+          }
+        } else {
+          resetTry(sess, "SOLD_PROD_Q2");
+      
+          const map = {
+            1: "Acero al carbón",
+            2: "Acero inoxidable",
+            3: "Aluminio",
+            4: "Galvanizado",
+            5: "Otro",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgSoldProdQ2();
+          } else {
+            sess.data.sold_prod_material = val;
+      
+            if (val === "Otro") {
+              sess.step = "SOLD_PROD_Q2_OTRO";
+              reply = msgSoldProdQ2Otro();
+            } else {
+              sess.step = "SOLD_PROD_Q3";
+              reply = msgSoldProdQ3();
+            }
           }
         }
       }
       else if (sess.step === "SOLD_PROD_Q2_OTRO") {
-        sess.data.sold_prod_material_otro = String(text || "").trim();
-        sess.step = "SOLD_PROD_Q3";
-        reply = msgSoldProdQ3();
+        const txt = String(text || "").trim();
+      
+        const okLen = txt.length >= 3;
+        const hasLetter = /[A-Za-zÑñ]/.test(txt) || /[ÁÉÍÓÚáéíóú]/.test(txt);
+      
+        if (!okLen || !hasLetter) {
+          const attempt = incTry(sess, "SOLD_PROD_Q2_OTRO");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré registrar el material a soldar. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Especifica el material a soldar (texto). Ej: Titanio / Cobre. (Intento ${attempt}/3)`;
+          }
+        } else {
+          resetTry(sess, "SOLD_PROD_Q2_OTRO");
+          sess.data.sold_prod_material_otro = txt;
+          sess.step = "SOLD_PROD_Q3";
+          reply = msgSoldProdQ3();
+        }
       }
       else if (sess.step === "SOLD_PROD_Q3") {
-        const map = {
-          "1": "Menor a 1 mm",
-          "2": "1–3 mm",
-          "3": "3–6 mm",
-          "4": "Más de 6 mm",
-          "5": "Aún no lo tengo definido",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgSoldProdQ3();
-        else {
-          sess.data.sold_prod_espesor = val;
-          sess.step = "SOLD_PROD_Q4";
-          reply = msgSoldProdQ4();
+        const choice = parseMenuChoice(text, 1, 5);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "SOLD_PROD_Q3");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender el espesor a soldar. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 5. (Intento ${attempt}/3)\n\n` +
+              msgSoldProdQ3();
+          }
+        } else {
+          resetTry(sess, "SOLD_PROD_Q3");
+      
+          const map = {
+            1: "Menor a 1 mm",
+            2: "1–3 mm",
+            3: "3–6 mm",
+            4: "Más de 6 mm",
+            5: "Aún no lo tengo definido",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgSoldProdQ3();
+          } else {
+            sess.data.sold_prod_espesor = val;
+            sess.step = "SOLD_PROD_Q4";
+            reply = msgSoldProdQ4();
+          }
         }
       }
       else if (sess.step === "SOLD_PROD_Q4") {
-        const map = {
-          "1": "MIG",
-          "2": "TIG",
-          "3": "Electrodo",
-          "4": "Soldadura tradicional + retrabajo",
-          "5": "Tercerizan el servicio",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgSoldProdQ4();
-        else {
-          sess.data.sold_prod_proceso_actual = val;
-          sess.step = "SOLD_PROD_Q5";
-          reply = msgSoldProdQ5();
+        const choice = parseMenuChoice(text, 1, 5);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "SOLD_PROD_Q4");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender el proceso de soldadura actual. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 5. (Intento ${attempt}/3)\n\n` +
+              msgSoldProdQ4();
+          }
+        } else {
+          resetTry(sess, "SOLD_PROD_Q4");
+      
+          const map = {
+            1: "MIG",
+            2: "TIG",
+            3: "Electrodo",
+            4: "Soldadura tradicional + retrabajo",
+            5: "Tercerizan el servicio",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgSoldProdQ4();
+          } else {
+            sess.data.sold_prod_proceso_actual = val;
+            sess.step = "SOLD_PROD_Q5";
+            reply = msgSoldProdQ5();
+          }
         }
       }
       else if (sess.step === "SOLD_PROD_Q5") {
-        const map = {
-          "1": "Producción continua (turnos diarios)",
-          "2": "50–200 piezas por mes",
-          "3": "Trabajo bajo pedido",
-          "4": "Proyecto en evaluación",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgSoldProdQ5();
-        else {
-          sess.data.sold_prod_volumen_mes = val;
-          sess.step = "NOMBRE";
-          reply = msgNombre();
+        const choice = parseMenuChoice(text, 1, 4);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "SOLD_PROD_Q5");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender el volumen mensual. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 4. (Intento ${attempt}/3)\n\n` +
+              msgSoldProdQ5();
+          }
+        } else {
+          resetTry(sess, "SOLD_PROD_Q5");
+      
+          const map = {
+            1: "Producción continua (turnos diarios)",
+            2: "50–200 piezas por mes",
+            3: "Trabajo bajo pedido",
+            4: "Proyecto en evaluación",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgSoldProdQ5();
+          } else {
+            sess.data.sold_prod_volumen_mes = val;
+            sess.step = "NOMBRE";
+            reply = msgNombre();
+          }
         }
       }
 
       // ---------- SOPORTE ----------
       else if (sess.step === "SOP_Q1") {
-        const map = {
-          "1": "Limpiadora láser",
-          "2": "Soldadora láser",
-          "3": "Marcadora láser",
-          "4": "Cortadora láser",
-          "5": "Otro equipo (especificar)",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgSopQ1();
-        else {
-          sess.data.sop_equipo = val;
-          if (val === "Otro equipo (especificar)") {
-            sess.step = "SOP_Q1_OTRO";
-            reply = msgSopQ1Otro();
+        const choice = parseMenuChoice(text, 1, 5);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "SOP_Q1");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender qué equipo tienes. Reiniciamos ✅\n\n" +
+              msgProducto();
           } else {
-            sess.step = "SOP_Q2";
-            reply = msgSopQ2();
+            reply =
+              `Responde solo con un número del 1 al 5. (Intento ${attempt}/3)\n\n` +
+              msgSopQ1();
+          }
+        } else {
+          resetTry(sess, "SOP_Q1");
+      
+          const map = {
+            1: "Limpiadora láser",
+            2: "Soldadora láser",
+            3: "Marcadora láser",
+            4: "Cortadora láser",
+            5: "Otro equipo (especificar)",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgSopQ1();
+          } else {
+            sess.data.sop_equipo = val;
+      
+            if (val === "Otro equipo (especificar)") {
+              sess.step = "SOP_Q1_OTRO";
+              reply = msgSopQ1Otro();
+            } else {
+              sess.step = "SOP_Q2";
+              reply = msgSopQ2();
+            }
           }
         }
       }
       else if (sess.step === "SOP_Q1_OTRO") {
-        sess.data.sop_equipo_otro = String(text || "").trim();
-        sess.step = "SOP_Q2";
-        reply = msgSopQ2();
+        const txt = String(text || "").trim();
+      
+        const okLen = txt.length >= 3;
+        const hasLetter = /[A-Za-zÑñ]/.test(txt) || /[ÁÉÍÓÚáéíóú]/.test(txt);
+      
+        if (!okLen || !hasLetter) {
+          const attempt = incTry(sess, "SOP_Q1_OTRO");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré registrar el equipo. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Especifica el equipo (texto). Ej: Fuente láser / Chiller / Cabezal. (Intento ${attempt}/3)`;
+          }
+        } else {
+          resetTry(sess, "SOP_Q1_OTRO");
+          sess.data.sop_equipo_otro = txt;
+          sess.step = "SOP_Q2";
+          reply = msgSopQ2();
+        }
       }
       else if (sess.step === "SOP_Q2") {
-        const map = { "1": "Sí", "2": "No" };
-        const val = pickOption(text, map);
-        if (!val) reply = msgSopQ2();
-        else {
-          sess.data.sop_es_feiyang = val;
-          sess.step = "SOP_Q3";
-          reply = msgSopQ3();
+        const choice = parseMenuChoice(text, 1, 2);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "SOP_Q2");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender si tu máquina es FEIYANG. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 2. (Intento ${attempt}/3)\n\n` +
+              msgSopQ2();
+          }
+        } else {
+          resetTry(sess, "SOP_Q2");
+      
+          const map = {
+            1: "Sí",
+            2: "No",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgSopQ2();
+          } else {
+            sess.data.sop_es_feiyang = val;
+            sess.step = "SOP_Q3";
+            reply = msgSopQ3();
+          }
         }
       }
       else if (sess.step === "SOP_Q3") {
-        const map = {
-          "1": "Refacción",
-          "2": "Mantenimiento",
-          "3": "Reparación",
-          "4": "Capacitación",
-          "5": "Actualización / mejora del equipo",
-        };
-        const val = pickOption(text, map);
-        if (!val) reply = msgSopQ3();
-        else {
-          sess.data.sop_tipo_apoyo = val;
-          sess.step = "NOMBRE";
-          reply = msgNombre();
+        const choice = parseMenuChoice(text, 1, 5);
+      
+        if (!choice) {
+          const attempt = incTry(sess, "SOP_Q3");
+          if (attempt >= 3) {
+            sess = startSession(from);
+            reply =
+              "No logré entender el tipo de apoyo. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con un número del 1 al 5. (Intento ${attempt}/3)\n\n` +
+              msgSopQ3();
+          }
+        } else {
+          resetTry(sess, "SOP_Q3");
+      
+          const map = {
+            1: "Refacción",
+            2: "Mantenimiento",
+            3: "Reparación",
+            4: "Capacitación",
+            5: "Actualización / mejora del equipo",
+          };
+      
+          const val = map[choice];
+          if (!val) {
+            reply = msgSopQ3();
+          } else {
+            sess.data.sop_tipo_apoyo = val;
+            sess.step = "NOMBRE";
+            reply = msgNombre();
+          }
         }
       }
-
       // ---------- Contacto ----------
       else if (sess.step === "NOMBRE") {
         const nombre = String(text || "").trim();
@@ -1181,30 +1718,34 @@ if (sess.step === "PRODUCTO") {
               `Escribe un correo válido. Ej: nombre@dominio.com (Intento ${attempt}/3)`;
           }
         } else {
-          resetTry(sess, "EMAIL");
-          sess.data.email = email;
-      
-          // ---- aquí dejas EXACTAMENTE tu lógica final actual ----
-          completed = true;
-          sess.step = "COMPLETED";
-      
-          const d = sess.data;
-          d.dentro_horario = isDentroHorarioCDMX();
-          d.qa_resumen = buildResumen(d);
-      
-          const cierre = d.dentro_horario
-            ? "✅ Un asesor especializado se pondrá en contacto contigo a la brevedad posible.\n¡Gracias por escribirnos!"
-            : "✅ Hemos recibido tu información.\nNuestro equipo te contactará en el próximo horario laboral (lun-vie 9:00 a 18:00).\n¡Gracias por tu interés!";
-      
-          reply =
-            "¡Gracias! Hemos registrado tus datos:\n\n" +
-            `• Producto: ${d.producto_interes_v2 || d.producto_interes || ""}\n` +
-            `• Nombre: ${d.nombre || ""}\n` +
-            `• Empresa: ${d.empresa || ""}\n` +
-            `• Ubicación: ${d.ubicacion || ""}\n` +
-            `• Email: ${d.email || ""}\n\n` +
-            cierre +
-            "\n\n(Escribe 'menu' para reiniciar)";
+          // dentro del else de EMAIL (cuando ok === true)
+resetTry(sess, "EMAIL");
+sess.data.email = email;
+
+// final
+completed = true;
+sess.step = "COMPLETED";
+
+const d = sess.data;
+
+// ✅ horario CDMX
+d.dentro_horario = isDentroHorarioCDMX();
+d.qa_resumen = buildResumen(d);
+
+// ✅ MENSAJE FINAL según horario (exacto como tu diagrama)
+const cierre = d.dentro_horario
+  ? "👨‍💼 Un asesor especializado se pondrá en contacto contigo a la brevedad posible para ayudarte con tu solicitud.\n¡Gracias por escribirnos!"
+  : "🕒 Hemos recibido tu información correctamente.\nNuestro equipo te contactará en el próximo horario laboral (lunes a viernes de 9:00 a 18:00).\n¡Gracias por tu interés!";
+
+reply =
+  "¡Gracias! Hemos registrado tus datos:\n\n" +
+  `• Producto: ${d.producto_interes_v2 || d.producto_interes || ""}\n` +
+  `• Nombre: ${d.nombre || ""}\n` +
+  `• Empresa: ${d.empresa || ""}\n` +
+  `• Ubicación: ${d.ubicacion || ""}\n` +
+  `• Email: ${d.email || ""}\n\n` +
+  cierre +
+  "\n\n(Escribe 'menu' para reiniciar)";
         }
       }
       else {
