@@ -666,19 +666,30 @@ const text = msg?.text?.body || "";
 
       // obtener sesión o iniciar
       let sess = getSession(from);
-if (!sess) {
-  sess = startSession(from);
-  console.log("[SESSION_START]", JSON.stringify({
-    from,
-    flowVersion: sess.flowVersion,
-    step: sess.step,
-  }));
-}
-
-logIn({ from, msgId, text, sess, msgTs });
-
-let reply = "";
-let completed = false;
+      if (!sess) {
+        sess = startSession(from);
+        console.log("[SESSION_START]", JSON.stringify({
+          from,
+          flowVersion: sess.flowVersion,
+          step: sess.step,
+          reason: "NO_ACTIVE_SESSION",
+        }));
+      
+        logIn({ from, msgId, text, sess, msgTs });
+      
+        await sendWhatsAppText(
+          waUrl,
+          waToken,
+          from,
+          "Tu conversación anterior expiró.\n\nTe muestro el menú principal para comenzar de nuevo.\n\n" + msgProducto()
+        );
+        return send(200, "OK");
+      }
+      
+      logIn({ from, msgId, text, sess, msgTs });
+      
+      let reply = "";
+      let completed = false;
 
       
       // ===== PRODUCTO (menú principal) =====
