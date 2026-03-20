@@ -7,7 +7,7 @@ let LARK_CACHE = { token: null, expiresAtMs: 0 };
 // - Convertir selects a option_id
 // - Formatear fechas según el tipo real del campo
 let LARK_FIELDS_CACHE = { byName: null, loadedAtMs: 0 };
-const LARK_FIELDS_TTL_MS = 15 * 60 * 1000; // 1 hora cache por instancia
+const LARK_FIELDS_TTL_MS = 15 * 60 * 1000; // 15 minutos cache por instancia
 
 // dedupe simple en memoria (sirve por instancia)
 const SEEN = new Map(); // msgId -> expiresAt
@@ -16,6 +16,70 @@ const SEEN_TTL_MS = 5 * 60 * 1000;
 // estado en memoria por wa_id (para pruebas). En serverless puede resetear si cambia instancia.
 const SESS = new Map(); // wa_id -> { step, data, updatedAt }
 const SESS_TTL_MS = 30 * 60 * 1000;
+
+// ====== Flow/session version ======
+const FLOW_VERSION = "2026-03-20.1";
+
+// ====== Debug logs ======
+function logIn({ from, msgId, text, sess, msgTs }) {
+  console.log("[IN]", JSON.stringify({
+    from: from || null,
+    msgId: msgId || null,
+    text: String(text || ""),
+    msgTs: msgTs || null,
+    flowVersion: sess?.flowVersion || null,
+    step_before: sess?.step || null,
+    producto_before: sess?.data?.producto_interes_v2 || sess?.data?.producto_interes || null,
+  }));
+}
+
+function logStep({ from, msgId, text, stepBefore, sess, note }) {
+  console.log("[STEP]", JSON.stringify({
+    from: from || null,
+    msgId: msgId || null,
+    text: String(text || ""),
+    note: note || null,
+    flowVersion: sess?.flowVersion || null,
+    step_before: stepBefore || null,
+    step_after: sess?.step || null,
+    producto_interes_v2: sess?.data?.producto_interes_v2 || sess?.data?.producto_interes || null,
+  }));
+}
+
+function logFallback({ from, msgId, text, sess, reason }) {
+  console.log("[FLOW_FALLBACK]", JSON.stringify({
+    from: from || null,
+    msgId: msgId || null,
+    text: String(text || ""),
+    reason: reason || null,
+    flowVersion: sess?.flowVersion || null,
+    step_before: sess?.step || null,
+    producto_interes_v2: sess?.data?.producto_interes_v2 || sess?.data?.producto_interes || null,
+  }));
+}
+
+function logSaveLark({ from, msgId, sess }) {
+  console.log("[SAVE_LARK]", JSON.stringify({
+    from: from || null,
+    msgId: msgId || null,
+    flowVersion: sess?.flowVersion || null,
+    step_before_save: sess?.step || null,
+    producto_interes_v2: sess?.data?.producto_interes_v2 || sess?.data?.producto_interes || null,
+    qa_resumen: sess?.data?.qa_resumen || null,
+    completed: true,
+  }));
+}
+
+// ====== Placeholder para dedupe compartido (Redis/KV) ======
+// Por ahora devuelve false y usamos SEEN local.
+// Más adelante aquí conectamos Upstash Redis / Vercel KV.
+async function hasSeenMessageShared(msgId) {
+  return false;
+}
+
+async function markMessageSeenShared(msgId) {
+  return;
+}
 
 function norm(s) {
   return String(s || "").trim().toLowerCase();
@@ -46,8 +110,13 @@ function cleanupMaps() {
 }
 
 function startSession(wa) {
-  // Ya NO usamos sucursal: arrancamos directo en PRODUCTO
-  const sess = { step: "PRODUCTO", data: {}, tries: {}, updatedAt: Date.now() };
+  const sess = {
+    flowVersion: FLOW_VERSION,
+    step: "PRODUCTO",
+    data: {},
+    tries: {},
+    updatedAt: Date.now(),
+  };
   SESS.set(wa, sess);
   return sess;
 }
@@ -55,6 +124,20 @@ function startSession(wa) {
 function getSession(wa) {
   const sess = SESS.get(wa);
   if (!sess) return null;
+
+  // Si la sesión no trae versión o no coincide con la versión actual, se invalida
+  if (!sess.flowVersion || sess.flowVersion !== FLOW_VERSION) {
+    console.log("[SESSION_VERSION_MISMATCH]", JSON.stringify({
+      wa,
+      currentFlowVersion: FLOW_VERSION,
+      sessionFlowVersion: sess.flowVersion || null,
+      oldStep: sess.step || null,
+      oldProducto: sess?.data?.producto_interes_v2 || sess?.data?.producto_interes || null,
+    }));
+    SESS.delete(wa);
+    return null;
+  }
+
   sess.updatedAt = Date.now();
   return sess;
 }
@@ -527,15 +610,37 @@ module.exports = async function handler(req, res) {
 
       // dedupe por message id
       const msgId = msg?.id;
-      const now = Date.now();
-      if (msgId && SEEN.has(msgId)) {
-        console.log("DEDUP_SKIP:", msgId);
-        return send(200, "OK");
-      }
-      if (msgId) SEEN.set(msgId, now + SEEN_TTL_MS);
+const msgTs = msg?.timestamp || null;
+const now = Date.now();
 
-      const from = msg?.from; // wa_id
-      const text = msg?.text?.body || "";
+// ===== DEDUPE compartido (placeholder) =====
+if (msgId) {
+  console.log("[DEDUPE_CHECK_SHARED]", JSON.stringify({ msgId }));
+  const sharedSeen = await hasSeenMessageShared(msgId);
+  if (sharedSeen) {
+    console.log("[DEDUPE_HIT_SHARED]", JSON.stringify({ msgId }));
+    return send(200, "OK");
+  }
+}
+
+// ===== DEDUPE local por instancia (actual) =====
+if (msgId && SEEN.has(msgId)) {
+  console.log("[DEDUPE_HIT_LOCAL]", JSON.stringify({ msgId }));
+  return send(200, "OK");
+}
+if (msgId) {
+  SEEN.set(msgId, now + SEEN_TTL_MS);
+  console.log("[DEDUPE_SET_LOCAL]", JSON.stringify({ msgId, ttlMs: SEEN_TTL_MS }));
+}
+
+// Marcamos también el placeholder compartido
+if (msgId) {
+  await markMessageSeenShared(msgId);
+  console.log("[DEDUPE_SET_SHARED]", JSON.stringify({ msgId }));
+}
+
+const from = msg?.from; // wa_id
+const text = msg?.text?.body || "";
       const phoneNumberId =
         value?.metadata?.phone_number_id ||
         process.env.WHATSAPP_PHONE_NUMBER_ID ||
@@ -561,15 +666,25 @@ module.exports = async function handler(req, res) {
 
       // obtener sesión o iniciar
       let sess = getSession(from);
-      if (!sess) sess = startSession(from);
+if (!sess) {
+  sess = startSession(from);
+  console.log("[SESSION_START]", JSON.stringify({
+    from,
+    flowVersion: sess.flowVersion,
+    step: sess.step,
+  }));
+}
 
-      let reply = "";
-      let completed = false;
+logIn({ from, msgId, text, sess, msgTs });
+
+let reply = "";
+let completed = false;
 
       
       // ===== PRODUCTO (menú principal) =====
-if (sess.step === "PRODUCTO") {
-  const choice = parseMenuChoice(text, 1, 5);
+      if (sess.step === "PRODUCTO") {
+        const stepBefore = sess.step;
+        const choice = parseMenuChoice(text, 1, 5);
 
   // inválido => contar intento
   if (!choice) {
@@ -581,6 +696,8 @@ if (sess.step === "PRODUCTO") {
       reply =
         "No logré entender la opción. Reiniciamos ✅\n\n" +
         msgProducto();
+      
+      logFallback({ from, msgId, text, sess, reason: "PRODUCTO_MAX_TRIES" });  
     } else {
       reply =
         `Responde solo con un número del 1 al 5. (Intento ${attempt}/3)\n\n` +
@@ -604,21 +721,32 @@ if (sess.step === "PRODUCTO") {
     if (prod === "Limpiadora láser") {
       sess.step = "LIMP_Q1";
       reply = msgLimpQ1();
+      logStep({ from, msgId, text, stepBefore, sess, note: "PRODUCTO->LIMP_Q1" });
+    
     } else if (prod === "Marcadora láser") {
       sess.step = "MARC_Q1";
       reply = msgMarcQ1();
+      logStep({ from, msgId, text, stepBefore, sess, note: "PRODUCTO->MARC_Q1" });
+    
     } else if (prod === "Cortadora láser") {
       sess.step = "CORT_Q1";
       reply = msgCortQ1();
+      logStep({ from, msgId, text, stepBefore, sess, note: "PRODUCTO->CORT_Q1" });
+    
     } else if (prod === "Soldadora láser") {
       sess.step = "SOLD_TIPO";
       reply = msgSoldTipo();
+      logStep({ from, msgId, text, stepBefore, sess, note: "PRODUCTO->SOLD_TIPO" });
+    
     } else if (prod === "Refacción / soporte técnico") {
       sess.step = "SOP_Q1";
       reply = msgSopQ1();
+      logStep({ from, msgId, text, stepBefore, sess, note: "PRODUCTO->SOP_Q1" });
+    
     } else {
       // fallback
       reply = msgProducto();
+      logFallback({ from, msgId, text, sess, reason: "PRODUCTO_UNKNOWN_SELECTION" });
     }
   }
 }
@@ -1097,6 +1225,7 @@ if (sess.step === "PRODUCTO") {
 
       // ---------- SOLDADORA ----------
       else if (sess.step === "SOLD_TIPO") {
+        const stepBefore = sess.step;
         const choice = parseMenuChoice(text, 1, 2);
       
         // inválido => contar intento
@@ -1109,6 +1238,9 @@ if (sess.step === "PRODUCTO") {
             reply =
               "No logré entender la opción de Soldadora. Reiniciamos ✅\n\n" +
               msgProducto();
+
+            logFallback({ from, msgId, text, sess, reason: "SOLD_TIPO_MAX_TRIES" });
+
           } else {
             reply =
               `Responde solo con un número del 1 al 2. (Intento ${attempt}/3)\n\n` +
@@ -1127,15 +1259,18 @@ if (sess.step === "PRODUCTO") {
           if (!val) {
             // fallback ultra seguro
             reply = msgSoldTipo();
+            logFallback({ from, msgId, text, sess, reason: "SOLD_TIPO_MAP_MISS" });
           } else {
             sess.data.sold_tipo = val;
       
             if (val === "Reparación de moldes") {
               sess.step = "SOLD_MOLDES_Q1";
               reply = msgSoldMoldesQ1();
+              logStep({ from, msgId, text, stepBefore, sess, note: "SOLD_TIPO->SOLD_MOLDES_Q1" });
             } else {
               sess.step = "SOLD_PROD_Q1";
               reply = msgSoldProdQ1();
+              logStep({ from, msgId, text, stepBefore, sess, note: "SOLD_TIPO->SOLD_PROD_Q1" });
             }
           }
         }
@@ -1650,6 +1785,7 @@ if (sess.step === "PRODUCTO") {
         }
       }
       else if (sess.step === "EMPRESA") {
+        const stepBefore = sess.step;
         const empresa = String(text || "").trim();
       
         const okLen = empresa.length >= 2;
@@ -1662,6 +1798,8 @@ if (sess.step === "PRODUCTO") {
             reply =
               "No logré registrar el nombre de tu empresa/taller. Reiniciamos ✅\n\n" +
               msgProducto();
+
+            logFallback({ from, msgId, text, sess, reason: "EMPRESA_MAX_TRIES" });  
           } else {
             reply =
               `Escribe el nombre de tu empresa o taller (solo texto). Ej: Taller Pérez. (Intento ${attempt}/3)`;
@@ -1671,6 +1809,8 @@ if (sess.step === "PRODUCTO") {
           sess.data.empresa = empresa;
           sess.step = "UBICACION";
           reply = msgUbicacion();
+
+          logStep({ from, msgId, text, stepBefore, sess, note: "EMPRESA->UBICACION" });
         }
       }
       else if (sess.step === "UBICACION") {
@@ -1750,6 +1890,7 @@ reply =
       }
       else {
         // si por algo quedó raro, reinicia
+        logFallback({ from, msgId, text, sess, reason: "UNKNOWN_STEP" });
         sess = startSession(from);
         reply = msgProducto();
       }
@@ -1761,6 +1902,8 @@ reply =
       if (completed) {
         try {
           const d = sess.data;
+
+          logSaveLark({ from, msgId, sess });
 
           await larkCreateLead({
             wa_id: String(from),
