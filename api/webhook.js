@@ -1,6 +1,6 @@
 // api/webhook.js (Vercel - CommonJS)
 // WhatsApp -> Node (cuestionarios por producto) -> (Lark create record al finalizar) -> Reply WhatsApp
-
+const { Redis } = require("@upstash/redis");
 let LARK_CACHE = { token: null, expiresAtMs: 0 };
 
 // Cache de metadata de fields para:
@@ -16,6 +16,13 @@ const SEEN_TTL_MS = 5 * 60 * 1000;
 // estado en memoria por wa_id (para pruebas). En serverless puede resetear si cambia instancia.
 const SESS = new Map(); // wa_id -> { step, data, updatedAt }
 const SESS_TTL_MS = 30 * 60 * 1000;
+const redis =
+  process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
+    ? new Redis({
+        url: process.env.UPSTASH_REDIS_REST_URL,
+        token: process.env.UPSTASH_REDIS_REST_TOKEN,
+      })
+    : null;
 
 // ====== Flow/session version ======
 const FLOW_VERSION = "2026-03-20.1";
@@ -109,7 +116,48 @@ function cleanupMaps() {
   for (const [wa, sess] of SESS) if ((sess?.updatedAt || 0) + SESS_TTL_MS <= now) SESS.delete(wa);
 }
 
-function startSession(wa) {
+function redisSessionKey(wa) {
+  return `sess:${wa}`;
+}
+
+async function saveSession(wa, sess) {
+  sess.updatedAt = Date.now();
+
+  // Fallback local por si Redis no está disponible
+  SESS.set(wa, sess);
+
+  if (!redis) return;
+
+  await redis.set(redisSessionKey(wa), sess, {
+    ex: Math.ceil(SESS_TTL_MS / 1000),
+  });
+}
+
+async function loadSession(wa) {
+  // Si hay Redis, intentamos primero ahí
+  if (redis) {
+    const sess = await redis.get(redisSessionKey(wa));
+    if (sess) {
+      sess.updatedAt = Date.now();
+      return sess;
+    }
+  }
+
+  // Fallback local
+  const sess = SESS.get(wa);
+  if (!sess) return null;
+  sess.updatedAt = Date.now();
+  return sess;
+}
+
+async function deleteSession(wa) {
+  SESS.delete(wa);
+
+  if (!redis) return;
+  await redis.del(redisSessionKey(wa));
+}
+
+async function startSession(wa) {
   const sess = {
     flowVersion: FLOW_VERSION,
     step: "PRODUCTO",
@@ -117,15 +165,14 @@ function startSession(wa) {
     tries: {},
     updatedAt: Date.now(),
   };
-  SESS.set(wa, sess);
+  await saveSession(wa, sess);
   return sess;
 }
 
-function getSession(wa) {
-  const sess = SESS.get(wa);
+async function getSession(wa) {
+  const sess = await loadSession(wa);
   if (!sess) return null;
 
-  // Si la sesión no trae versión o no coincide con la versión actual, se invalida
   if (!sess.flowVersion || sess.flowVersion !== FLOW_VERSION) {
     console.log("[SESSION_VERSION_MISMATCH]", JSON.stringify({
       wa,
@@ -134,11 +181,11 @@ function getSession(wa) {
       oldStep: sess.step || null,
       oldProducto: sess?.data?.producto_interes_v2 || sess?.data?.producto_interes || null,
     }));
-    SESS.delete(wa);
+    await deleteSession(wa);
     return null;
   }
 
-  sess.updatedAt = Date.now();
+  await saveSession(wa, sess);
   return sess;
 }
 
@@ -657,17 +704,17 @@ const text = msg?.text?.body || "";
 
       // reiniciar/menu
       if (t === "menu" || t === "reiniciar" || t === "reset" || t === "inicio") {
-        const sess = startSession(from);
-        sess.updatedAt = Date.now();
+        const sess = await startSession(from);
+sess.updatedAt = Date.now();
 
-        await sendWhatsAppText(waUrl, waToken, from, msgProducto());
-        return send(200, "OK");
+await sendWhatsAppText(waUrl, waToken, from, msgProducto());
+return send(200, "OK");
       }
 
       // obtener sesión o iniciar
-      let sess = getSession(from);
+      let sess = await getSession(from);
       if (!sess) {
-        sess = startSession(from);
+        sess = await startSession(from);
         console.log("[SESSION_START]", JSON.stringify({
           from,
           flowVersion: sess.flowVersion,
@@ -703,7 +750,7 @@ const text = msg?.text?.body || "";
 
     if (attempt >= 3) {
       // 3er fallo => reiniciar automático
-      sess = startSession(from);
+      sess = await startSession(from);
       reply =
         "No logré entender la opción. Reiniciamos ✅\n\n" +
         msgProducto();
@@ -769,7 +816,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "LIMP_Q1");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender la opción de limpieza. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -806,7 +853,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "LIMP_Q2");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender la opción del proceso actual. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -843,7 +890,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "LIMP_Q3");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender la opción del volumen de trabajo. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -879,7 +926,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "LIMP_Q4");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender la etapa del proyecto. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -916,7 +963,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "MARC_Q1");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender el material a marcar. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -952,7 +999,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "MARC_Q2");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender el volumen de producción. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -987,7 +1034,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "MARC_Q3");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender el proceso actual de marcado. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1023,7 +1070,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "MARC_Q4");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender la etapa del proyecto. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1060,7 +1107,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "CORT_Q1");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender el material a cortar. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1097,7 +1144,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "CORT_Q2");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender el espesor a cortar. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1133,7 +1180,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "CORT_Q3");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender el volumen de producción. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1168,7 +1215,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "CORT_Q4");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender el proceso actual de corte. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1204,7 +1251,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "CORT_Q5");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender la etapa del proyecto. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1245,7 +1292,7 @@ const text = msg?.text?.body || "";
       
           if (attempt >= 3) {
             // 3er fallo => reiniciar automático
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender la opción de Soldadora. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1294,7 +1341,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "SOLD_MOLDES_Q1");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender la cantidad de moldes por mes. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1329,7 +1376,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "SOLD_MOLDES_Q2");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender la opción de mantenimiento interno. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1363,7 +1410,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "SOLD_MOLDES_Q3");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender la etapa del proyecto. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1400,7 +1447,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "SOLD_PROD_Q1");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender el tipo de producto a soldar. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1444,7 +1491,7 @@ const text = msg?.text?.body || "";
         if (!okLen || !hasLetter) {
           const attempt = incTry(sess, "SOLD_PROD_Q1_OTRO");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré registrar el producto a soldar. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1465,7 +1512,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "SOLD_PROD_Q2");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender el material a soldar. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1510,7 +1557,7 @@ const text = msg?.text?.body || "";
         if (!okLen || !hasLetter) {
           const attempt = incTry(sess, "SOLD_PROD_Q2_OTRO");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré registrar el material a soldar. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1531,7 +1578,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "SOLD_PROD_Q3");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender el espesor a soldar. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1567,7 +1614,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "SOLD_PROD_Q4");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender el proceso de soldadura actual. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1603,7 +1650,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "SOLD_PROD_Q5");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender el volumen mensual. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1640,7 +1687,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "SOP_Q1");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender qué equipo tienes. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1685,7 +1732,7 @@ const text = msg?.text?.body || "";
         if (!okLen || !hasLetter) {
           const attempt = incTry(sess, "SOP_Q1_OTRO");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré registrar el equipo. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1706,7 +1753,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "SOP_Q2");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender si tu máquina es FEIYANG. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1739,7 +1786,7 @@ const text = msg?.text?.body || "";
         if (!choice) {
           const attempt = incTry(sess, "SOP_Q3");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré entender el tipo de apoyo. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1780,7 +1827,7 @@ const text = msg?.text?.body || "";
         if (!okLen || !hasLetter) {
           const attempt = incTry(sess, "NOMBRE");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré registrar tu nombre correctamente. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1805,7 +1852,7 @@ const text = msg?.text?.body || "";
         if (!okLen || !hasLetter) {
           const attempt = incTry(sess, "EMPRESA");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré registrar el nombre de tu empresa/taller. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1833,7 +1880,7 @@ const text = msg?.text?.body || "";
         if (!okLen || !hasLetter) {
           const attempt = incTry(sess, "UBICACION");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré registrar tu ubicación correctamente. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1860,7 +1907,7 @@ const text = msg?.text?.body || "";
         if (!ok) {
           const attempt = incTry(sess, "EMAIL");
           if (attempt >= 3) {
-            sess = startSession(from);
+            sess = await startSession(from);
             reply =
               "No logré registrar tu correo correctamente. Reiniciamos ✅\n\n" +
               msgProducto();
@@ -1902,12 +1949,16 @@ reply =
       else {
         // si por algo quedó raro, reinicia
         logFallback({ from, msgId, text, sess, reason: "UNKNOWN_STEP" });
-        sess = startSession(from);
+        sess = await startSession(from);
         reply = msgProducto();
       }
 
       // ======= Responder WhatsApp (rápido) =======
       await sendWhatsAppText(waUrl, waToken, from, reply);
+
+      if (!completed && sess) {
+        await saveSession(from, sess);
+      }
 
       // ======= Guardar en Lark SOLO al finalizar (después de WhatsApp) =======
       if (completed) {
@@ -1983,7 +2034,7 @@ reply =
           console.error("LARK_SYNC_ERROR:", e?.message || e);
         } finally {
           // limpia sesión para que no repita
-          SESS.delete(from);
+          await deleteSession(from);
         }
       }
 
