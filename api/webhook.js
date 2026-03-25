@@ -2046,6 +2046,7 @@ return send(200, "OK");
             requiere_humano: d.requiere_humano || "",
             motivo_atencion: d.motivo_atencion || "",
             ultimo_mensaje_cliente: d.ultimo_mensaje_cliente || "",
+            whatsapp_link: `https://wa.me/${from}`,
 
             // limpiadora
             limp_que_limpia: d.limp_que_limpia || "",
@@ -2305,6 +2306,7 @@ async function larkCreateLead({
   requiere_humano,
   motivo_atencion,
   ultimo_mensaje_cliente,
+  whatsapp_link,
 
   // limpiadora
   limp_que_limpia,
@@ -2380,6 +2382,7 @@ async function larkCreateLead({
     requiere_humano,
     motivo_atencion,
     ultimo_mensaje_cliente,
+    whatsapp_link,
 
     // limpiadora
     limp_que_limpia,
