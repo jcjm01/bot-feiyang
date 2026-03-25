@@ -163,6 +163,7 @@ async function startSession(wa) {
     step: "PRODUCTO",
     data: {},
     tries: {},
+    handoffHuman: false,
     updatedAt: Date.now(),
   };
   await saveSession(wa, sess);
@@ -734,6 +735,16 @@ return send(200, "OK");
       }
       
       logIn({ from, msgId, text, sess, msgTs });
+
+      if (sess?.handoffHuman) {
+        console.log("[HANDOFF_HUMAN_SKIP]", JSON.stringify({
+          from,
+          msgId,
+          text: String(text || ""),
+          step_before: sess?.step || null,
+        }));
+        return send(200, "OK");
+      }
       
       let reply = "";
       let completed = false;
@@ -2033,8 +2044,19 @@ reply =
         } catch (e) {
           console.error("LARK_SYNC_ERROR:", e?.message || e);
         } finally {
-          // limpia sesión para que no repita
-          await deleteSession(from);
+          sess.handoffHuman = true;
+          sess.step = "HUMAN_HANDOFF";
+          sess.tries = {};
+          sess.updatedAt = Date.now();
+        
+          await saveSession(from, sess);
+        
+          console.log("[HANDOFF_HUMAN_SET]", JSON.stringify({
+            from,
+            msgId,
+            step_after: sess.step,
+            producto_interes_v2: sess?.data?.producto_interes_v2 || sess?.data?.producto_interes || null,
+          }));
         }
       }
 
