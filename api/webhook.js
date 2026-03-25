@@ -25,7 +25,7 @@ const redis =
     : null;
 
 // ====== Flow/session version ======
-const FLOW_VERSION = "2026-03-20.1";
+const FLOW_VERSION = "2026-03-25.1";
 
 // ====== Debug logs ======
 function logIn({ from, msgId, text, sess, msgTs }) {
@@ -534,6 +534,16 @@ function msgUbicacion() {
 
 function msgEmail() {
   return "Por último, ¿nos compartes tu correo electrónico?";
+}
+
+function msgRequiereHumano() {
+  return (
+`¿Deseas que un asesor humano de FEIYANG MAQUINARIA te contacte?
+Responde con el número:
+
+1) Si
+2) No`
+  );
 }
 
 function isDentroHorarioCDMX() {
@@ -1927,36 +1937,78 @@ return send(200, "OK");
               `Escribe un correo válido. Ej: nombre@dominio.com (Intento ${attempt}/3)`;
           }
         } else {
-          // dentro del else de EMAIL (cuando ok === true)
-resetTry(sess, "EMAIL");
-sess.data.email = email;
-
-// final
-completed = true;
-sess.step = "COMPLETED";
-
-const d = sess.data;
-
-// ✅ horario CDMX
-d.dentro_horario = isDentroHorarioCDMX();
-d.qa_resumen = buildResumen(d);
-
-// ✅ MENSAJE FINAL según horario (exacto como tu diagrama)
-const cierre = d.dentro_horario
-  ? "👨‍💼 Un asesor especializado se pondrá en contacto contigo a la brevedad posible para ayudarte con tu solicitud.\n¡Gracias por escribirnos!"
-  : "🕒 Hemos recibido tu información correctamente.\nNuestro equipo te contactará en el próximo horario laboral (lunes a viernes de 9:00 a 18:00).\n¡Gracias por tu interés!";
-
-reply =
-  "¡Gracias! Hemos registrado tus datos:\n\n" +
-  `• Producto: ${d.producto_interes_v2 || d.producto_interes || ""}\n` +
-  `• Nombre: ${d.nombre || ""}\n` +
-  `• Empresa: ${d.empresa || ""}\n` +
-  `• Ubicación: ${d.ubicacion || ""}\n` +
-  `• Email: ${d.email || ""}\n\n` +
-  cierre +
-  "\n\n(Escribe 'menu' para reiniciar)";
+          resetTry(sess, "EMAIL");
+          sess.data.email = email;
+        
+          // Preparamos datos, pero todavía NO cerramos
+          sess.data.dentro_horario = isDentroHorarioCDMX();
+          sess.data.qa_resumen = buildResumen(sess.data);
+        
+          // Nuevo paso final
+          sess.step = "REQUIERE_HUMANO";
+          reply = msgRequiereHumano();
         }
       }
+      else if (sess.step === "REQUIERE_HUMANO") {
+        const t = norm(text);
+      
+        let val = "";
+        if (t === "1" || t === "si" || t === "sí") val = "Si";
+        else if (t === "2" || t === "no") val = "No";
+      
+        if (!val) {
+          const attempt = incTry(sess, "REQUIERE_HUMANO");
+          if (attempt >= 3) {
+            sess = await startSession(from);
+            reply =
+              "No logré entender tu respuesta. Reiniciamos ✅\n\n" +
+              msgProducto();
+          } else {
+            reply =
+              `Responde solo con:\n1) Si\n2) No\n\n(Intento ${attempt}/3)\n\n` +
+              msgRequiereHumano();
+          }
+        } else {
+          resetTry(sess, "REQUIERE_HUMANO");
+      
+          sess.data.requiere_humano = val;
+      
+          if (val === "Si") {
+            sess.data.motivo_atencion = "Solicita asesor humano al finalizar cuestionario";
+            sess.data.ultimo_mensaje_cliente = "Responde Sí a contacto humano";
+          } else {
+            sess.data.motivo_atencion = "";
+            sess.data.ultimo_mensaje_cliente = "";
+          }
+      
+          completed = true;
+          sess.step = "COMPLETED";
+      
+          const d = sess.data;
+      
+          const cierre =
+            d.requiere_humano === "Si"
+              ? (
+                  d.dentro_horario
+                    ? "👨‍💼 Un asesor especializado se pondrá en contacto contigo a la brevedad posible para ayudarte con tu solicitud.\n¡Gracias por escribirnos!"
+                    : "🕒 Hemos recibido tu información correctamente.\nNuestro equipo te contactará en el próximo horario laboral (lunes a viernes de 9:00 a 18:00).\n¡Gracias por tu interés!"
+                )
+              : "Perfecto. Hemos registrado tu información.\nSi más adelante necesitas apoyo, escríbenos y con gusto te ayudamos.";
+      
+          reply =
+            "¡Gracias! Hemos registrado tus datos:\n\n" +
+            `• Producto: ${d.producto_interes_v2 || d.producto_interes || ""}\n` +
+            `• Nombre: ${d.nombre || ""}\n` +
+            `• Empresa: ${d.empresa || ""}\n` +
+            `• Ubicación: ${d.ubicacion || ""}\n` +
+            `• Email: ${d.email || ""}\n` +
+            `• Requiere asesor humano: ${d.requiere_humano || ""}\n\n` +
+            cierre +
+            "\n\n(Escribe 'menu' para reiniciar)";
+        }
+      }
+
+
       else {
         // si por algo quedó raro, reinicia
         logFallback({ from, msgId, text, sess, reason: "UNKNOWN_STEP" });
@@ -1991,6 +2043,9 @@ reply =
             producto_interes_v2: d.producto_interes_v2 || "",
             qa_resumen: d.qa_resumen || "",
             dentro_horario: !!d.dentro_horario,
+            requiere_humano: d.requiere_humano || "",
+            motivo_atencion: d.motivo_atencion || "",
+            ultimo_mensaje_cliente: d.ultimo_mensaje_cliente || "",
 
             // limpiadora
             limp_que_limpia: d.limp_que_limpia || "",
@@ -2247,6 +2302,9 @@ async function larkCreateLead({
   producto_interes_v2,
   qa_resumen,
   dentro_horario,
+  requiere_humano,
+  motivo_atencion,
+  ultimo_mensaje_cliente,
 
   // limpiadora
   limp_que_limpia,
@@ -2319,6 +2377,9 @@ async function larkCreateLead({
     producto_interes_v2,
     qa_resumen,
     dentro_horario,
+    requiere_humano,
+    motivo_atencion,
+    ultimo_mensaje_cliente,
 
     // limpiadora
     limp_que_limpia,
