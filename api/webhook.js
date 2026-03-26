@@ -538,7 +538,7 @@ function msgEmail() {
 
 function msgRequiereHumano() {
   return (
-`¿Deseas que un asesor humano de FEIYANG MAQUINARIA te contacte?
+`¿Deseas que un asesor de FEIYANG MAQUINARIA te contacte?
 Responde con el número:
 
 1) Si
