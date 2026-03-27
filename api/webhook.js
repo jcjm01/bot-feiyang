@@ -200,7 +200,9 @@ function pickOption(t, map) {
 function msgProducto() {
   return (
 `Gracias por contactar a FEIYANG MAQUINARIA.
-Para orientarte correctamente, indícanos:
+ Somos fabricantes de maquinaria láser industrial
+
+ Para orientarte correctamente, indícanos:
 
 ¿Qué tipo de equipo láser estás buscando?
 (Responde con el número)
