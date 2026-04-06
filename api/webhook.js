@@ -26,6 +26,7 @@ const redis =
 
 // ====== Flow/session version ======
 const FLOW_VERSION = "2026-03-25.1";
+const REDIS_KEY_PREFIX = process.env.REDIS_KEY_PREFIX || "";
 
 // ====== Debug logs ======
 function logIn({ from, msgId, text, sess, msgTs }) {
@@ -117,7 +118,7 @@ function cleanupMaps() {
 }
 
 function redisSessionKey(wa) {
-  return `sess:${wa}`;
+  return `${REDIS_KEY_PREFIX}sess:${wa}`;
 }
 
 async function saveSession(wa, sess) {
