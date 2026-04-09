@@ -2141,25 +2141,6 @@ async function sendWhatsAppText(waUrl, waToken, to, bodyText) {
     text: { body: String(bodyText || "") },
   };
 
-  // ===== STAGING ONLY: SIMULACION META =====
-  console.log("SIMULATED_SEND:", JSON.stringify({
-    to,
-    waUrl,
-    payload,
-  }, null, 2));
-
-  return {
-    status: 200,
-    data: {
-      ok: true,
-      simulated: true,
-      to,
-      body: String(bodyText || ""),
-    },
-  };
-
-  /*
-  // ===== ENVIO REAL A META =====
   const resp = await fetch(waUrl, {
     method: "POST",
     headers: {
@@ -2172,7 +2153,6 @@ async function sendWhatsAppText(waUrl, waToken, to, bodyText) {
   const data = await resp.json().catch(() => ({}));
   console.log("SEND_RESPONSE:", resp.status, JSON.stringify(data, null, 2));
   return { status: resp.status, data };
-  */
 }
 
 // =========================
