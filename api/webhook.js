@@ -2141,6 +2141,34 @@ async function sendWhatsAppText(waUrl, waToken, to, bodyText) {
     text: { body: String(bodyText || "") },
   };
 
+  // =========================================================
+  // STAGING: SIMULACION DE ENVIO
+  // - No manda nada a Meta
+  // - Solo deja en logs lo que el bot hubiera respondido
+  // =========================================================
+  console.log("SIMULATED_SEND:", JSON.stringify({
+    to,
+    waUrl,
+    payload,
+  }, null, 2));
+
+  return {
+    status: 200,
+    data: {
+      ok: true,
+      simulated: true,
+      to,
+      body: String(bodyText || ""),
+    },
+  };
+
+  /*
+  // =========================================================
+  // PRODUCCION: ENVIO REAL A META
+  // - Para volver a produccion:
+  //   1) comentar o borrar el bloque STAGING de arriba
+  //   2) descomentar este bloque
+  // =========================================================
   const resp = await fetch(waUrl, {
     method: "POST",
     headers: {
@@ -2153,6 +2181,7 @@ async function sendWhatsAppText(waUrl, waToken, to, bodyText) {
   const data = await resp.json().catch(() => ({}));
   console.log("SEND_RESPONSE:", resp.status, JSON.stringify(data, null, 2));
   return { status: resp.status, data };
+  */
 }
 
 // =========================
